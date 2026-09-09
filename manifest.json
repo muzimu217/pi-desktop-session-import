@@ -1,0 +1,51 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.muzimu217.session-import",
+  "name": "Universal Session Import",
+  "version": "0.1.0",
+  "description": "一体化会话导入：扫描本机的 ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi，选择会话一键导入 PI-Desktop。Scan every local coding agent on this machine and import their conversations in one place.",
+  "author": "muzimu217",
+  "main": "main.js",
+  "ui": {
+    "panel": "views/importer.html",
+    "width": 1040,
+    "height": 720,
+    "title": {
+      "en": "Session Import",
+      "zh-CN": "一体化会话导入"
+    }
+  },
+  "contributes": {
+    "views": [
+      {
+        "id": "universal-session-import",
+        "title": {
+          "en": "Session Import",
+          "zh-CN": "一体化会话导入"
+        },
+        "icon": "list-checks",
+        "entry": "views/importer.html",
+        "order": 45
+      }
+    ],
+    "commands": [
+      {
+        "id": "session-import.open",
+        "title": "Session Import: Open Panel",
+        "keywords": ["import", "导入", "会话", "zcode", "workbuddy", "claude", "codex", "opencode"],
+        "category": "Import"
+      }
+    ]
+  },
+  "permissions": [
+    "ui.panel",
+    "ui.view"
+  ],
+  "engines": {
+    "piDesktop": ">=0.14.0"
+  },
+  "activationEvents": [
+    "onCommand:session-import.open",
+    "onStartup"
+  ]
+}
