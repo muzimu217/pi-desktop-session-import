@@ -48,7 +48,7 @@
   "permissions": [
     "ui.panel",
     "ui.view",
-    "session.import"
+    "session.read"
   ],
   "engines": {
     "piDesktop": ">=0.14.0"
