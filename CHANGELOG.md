@@ -42,3 +42,13 @@ semver; the plugin id is `io.github.muzimu217.session-import`.
 - 导入结果反馈细化：imported / skipped / failed 分开统计并逐条展示失败原因。
 - 注：官方契约中导入会话默认不绑定项目/provider/model（`project_id` NULL，
   历史值存 origin 侧车）；侧栏呈现方案见我们在 #169 的反馈建议。
+
+## 0.3.0-real-UI 验证记录（2026-09-09）
+
+在宿主 `feat/zcode-session-import` 分支（含 c34c7927 桥接补丁）上通过 CDP 真实鼠标交互完成端到端验证（截图见 docs/e2e-*.png）：
+
+- 面板扫描：ZCode 66 / WorkBuddy 126 / Claude Code 62 / Codex 767
+- 幂等跳过：重复导入已导入会话 → “已导入 0 个（跳过 1 个重复/不可读）”
+- 新导入：ZCode《MCP跨平台打包工具项目评估》→ “已导入 1 个会话（跳过 0）”
+- **侧栏即时可见**：`sessionsChanged` 桥接生效，侧栏立即出现 ForgeKit 项目分组与新会话（对照：在无桥接的分支上导入成功但侧栏不刷新）
+- 点开会话：消息完整渲染（markdown / 代码段正常）
