@@ -623,22 +623,42 @@
         $("import-btn").disabled = true;
         setStatus(`正在导入 ${summaries.length} 个会话…`);
         try {
-          const res = await bridge.invoke("import.convertBatch", {
-            source: state.activeSource,
-            items: summaries,
-          });
-          let imported = 0;
-          let skipped = 0;
-          for (const conv of res.sessions) {
-            const r = await bridge.invoke("session.import", conv);
-            if (r?.imported) imported += 1;
-            else skipped += 1;
+          let caps = { officialSessionApi: false };
+          try {
+            caps = await bridge.invoke("import.capabilities");
+          } catch {}
+          if (caps.officialSessionApi) {
+            // Official pi.session.importBatch path (#169 P0/P1)
+            const r = await bridge.invoke("import.commit", {
+              source: state.activeSource,
+              items: summaries,
+            });
+            const parts = [`已导入 ${r.imported} 个会话`];
+            if (r.skipped) parts.push(`跳过 ${r.skipped} 个重复/不可读`);
+            if (r.failed?.length) parts.push(`${r.failed.length} 个失败`);
+            setStatus(
+              `${parts.join("，")}——左侧会话列表即刻可见`,
+              r.failed?.length ? "err" : "ok",
+            );
+          } else {
+            // Legacy dev-build bridge fallback (local patched host only)
+            const res = await bridge.invoke("import.convertBatch", {
+              source: state.activeSource,
+              items: summaries,
+            });
+            let imported = 0;
+            let skipped = 0;
+            for (const conv of res.sessions) {
+              const r = await bridge.invoke("session.import", conv);
+              if (r?.imported) imported += 1;
+              else skipped += 1;
+            }
+            if (res.unreadable) skipped += res.unreadable;
+            setStatus(
+              `已导入 ${imported} 个会话（跳过 ${skipped} 个重复/不可读）——左侧项目列表即刻可见`,
+              "ok",
+            );
           }
-          if (res.unreadable) skipped += res.unreadable;
-          setStatus(
-            `已导入 ${imported} 个会话（跳过 ${skipped} 个重复/不可读）——左侧项目列表即刻可见`,
-            "ok",
-          );
         } catch (error) {
           setStatus(`导入失败：${error}`, "err");
         } finally {

@@ -25,3 +25,20 @@ semver; the plugin id is `io.github.muzimu217.session-import`.
   （CSS grid-template-rows 过渡，Chromium 原生支持，无额外依赖）。
 - 默认全部展开；用户的展开/折叠偏好通过面板 localStorage 持久化，
   重开面板后保持。
+
+## 0.3.0 — 2026-09-09（待官方 a7e466fa 推送后实测发布）
+
+- **适配官方会话 API（[PI-Desktop#169](https://github.com/vastsa/PI-Desktop/issues/169) P0/P1）**：
+  导入路径改为双通道——
+  - 宿主提供 `pi.session.importBatch` 时走**官方契约**：
+    manifest 声明 `contributes.sessionSources`（六来源）与 `session.import` 权限；
+    批量导入（契约上限 100 会话/批自动分批、mode: skip）、幂等键
+    `(pluginId, source, externalId)`、host 生成 id。
+  - 旧宿主回退到本地 dev 构建的 `session.import` 桥接（行为与 0.2.0 相同）。
+- **契约校验护栏**（转换输出 → `PluginSessionMessage`）：
+  严格 RFC3339 时间戳；`createdAt ≤ updatedAt`；消息时间单调不减（越界钳制）；
+  title ≤ 200 字符、externalId ≤ 256 字符；单条 content ≤ 512 KiB；
+  toolArgs/toolResult 序列化 ≤ 256 KiB、JSON 深度 ≤ 8（超深自动降级为字符串）。
+- 导入结果反馈细化：imported / skipped / failed 分开统计并逐条展示失败原因。
+- 注：官方契约中导入会话默认不绑定项目/provider/model（`project_id` NULL，
+  历史值存 origin 侧车）；侧栏呈现方案见我们在 #169 的反馈建议。
