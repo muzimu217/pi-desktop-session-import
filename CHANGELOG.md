@@ -16,3 +16,12 @@ semver; the plugin id is `io.github.muzimu217.session-import`.
 - 来源实现来源：ZCode / WorkBuddy 适配器沿用本仓库两个单体插件的已验证逻辑；
   Claude Code / Codex / OpenCode / Pi 移植自 PI-Desktop 内置导入器。
 - 官方 `pi-plugin check` 通过。
+
+## 0.2.0 — 2026-09-09
+
+- 来源会话列表新增**可折叠手风琴**：点击项目标题栏（箭头 + 项目名 + 会话数）
+  展开或收起该项目下的会话；「全选该项目」按钮阻止事件冒泡，不会触发展开/收起。
+- 动效：箭头展开时顺时针平滑旋转 90°；列表区域以高度 + 透明度过渡展开收起
+  （CSS grid-template-rows 过渡，Chromium 原生支持，无额外依赖）。
+- 默认全部展开；用户的展开/折叠偏好通过面板 localStorage 持久化，
+  重开面板后保持。

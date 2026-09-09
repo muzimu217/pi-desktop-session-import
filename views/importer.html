@@ -155,10 +155,41 @@
         top: 0;
         background: var(--surface);
         z-index: 1;
+        border-radius: 8px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .group-head[aria-expanded="true"] .chev { transform: rotate(90deg); }
+      .chev {
+        display: inline-block;
+        width: 10px;
+        color: var(--muted);
+        font-size: 10px;
+        line-height: 1;
+        text-align: center;
+        transition: transform 0.22s ease;
       }
       .group-head .gname { font-weight: 650; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .group-head .gcount { color: var(--muted); font-size: 11px; white-space: nowrap; }
       .group-head button { margin-left: auto; padding: 2px 8px; font-size: 11px; border-radius: 6px; }
+      .group-body {
+        display: grid;
+        grid-template-rows: 1fr;
+        opacity: 1;
+        transition: grid-template-rows 0.26s ease, opacity 0.18s ease;
+      }
+      .group-body > .group-body-inner {
+        overflow: hidden;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .group.collapsed .group-body {
+        grid-template-rows: 0fr;
+        opacity: 0;
+        pointer-events: none;
+      }
       .session-row {
         display: grid;
         grid-template-columns: auto 1fr;
@@ -420,6 +451,21 @@
       const matchesFilter = (s, q) =>
         !q || s.title.toLowerCase().includes(q) || (s.projectPath ?? "").toLowerCase().includes(q);
 
+      const COLLAPSE_KEY = "pi-universal-import.collapsedProjects";
+      let collapsedProjects = new Set();
+      try {
+        collapsedProjects = new Set(JSON.parse(localStorage.getItem(COLLAPSE_KEY) || "[]"));
+      } catch {
+        collapsedProjects = new Set();
+      }
+      const saveCollapsed = () => {
+        try {
+          localStorage.setItem(COLLAPSE_KEY, JSON.stringify([...collapsedProjects]));
+        } catch {
+          // persistence is best-effort; collapse still works in-session
+        }
+      };
+
       function renderList() {
         const q = $("filter").value.trim().toLowerCase();
         const list = $("session-list");
@@ -432,17 +478,29 @@
           groups.get(key).push(s);
         }
         for (const [projectPath, sessions] of groups) {
+          const groupKey = projectPath || "__none__";
+          const isCollapsed = collapsedProjects.has(groupKey);
+
+          const group = document.createElement("div");
+          group.className = "group " + (isCollapsed ? "collapsed" : "expanded");
+
           const head = document.createElement("div");
           head.className = "group-head";
+          head.setAttribute("role", "button");
+          head.setAttribute("tabindex", "0");
+          head.setAttribute("aria-expanded", String(!isCollapsed));
+          head.title = projectPath || "";
           const name = projectPath
             ? projectPath.replace(/[\\/]+$/, "").split(/[\\/]/).pop()
             : "未关联项目";
-          head.title = projectPath || "";
-          head.innerHTML = `<span class="gname">${esc(name)}</span><span class="gcount">${sessions.length} 个会话</span>`;
+          head.innerHTML = `<span class="chev">▶</span><span class="gname">${esc(name)}</span><span class="gcount">${sessions.length} 个会话</span>`;
+
           const allSelected = sessions.every((s) => state.selected.has(s.externalId));
           const btn = document.createElement("button");
           btn.textContent = allSelected ? "取消全选" : "全选该项目";
-          btn.addEventListener("click", () => {
+          // Selecting a whole project must not toggle the accordion.
+          btn.addEventListener("click", (e) => {
+            e.stopPropagation();
             for (const s of sessions) {
               allSelected ? state.selected.delete(s.externalId) : state.selected.add(s.externalId);
             }
@@ -450,7 +508,27 @@
             updateCount();
           });
           head.appendChild(btn);
-          list.appendChild(head);
+
+          const toggleCollapse = () => {
+            const nowCollapsed = !group.classList.contains("collapsed");
+            group.classList.toggle("collapsed", nowCollapsed);
+            group.classList.toggle("expanded", !nowCollapsed);
+            head.setAttribute("aria-expanded", String(!nowCollapsed));
+            nowCollapsed ? collapsedProjects.add(groupKey) : collapsedProjects.delete(groupKey);
+            saveCollapsed();
+          };
+          head.addEventListener("click", toggleCollapse);
+          head.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              toggleCollapse();
+            }
+          });
+
+          const body = document.createElement("div");
+          body.className = "group-body";
+          const inner = document.createElement("div");
+          inner.className = "group-body-inner";
 
           for (const s of sessions) {
             const row = document.createElement("div");
@@ -469,8 +547,12 @@
               <div class="meta"><span>${fmtDate(s.updatedAt)}</span><span>·</span><span>${s.messageCount} 条</span></div>`;
             row.append(cb, text);
             row.addEventListener("click", () => selectSession(s));
-            list.appendChild(row);
+            inner.appendChild(row);
           }
+
+          body.appendChild(inner);
+          group.append(head, body);
+          list.appendChild(group);
         }
       }
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.muzimu217.session-import",
   "name": "Universal Session Import",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "一体化会话导入：扫描本机的 ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi，选择会话一键导入 PI-Desktop。Scan every local coding agent on this machine and import their conversations in one place.",
   "author": "muzimu217",
   "main": "main.js",
