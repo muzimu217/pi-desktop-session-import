@@ -3,6 +3,14 @@
 All notable changes to this plugin are documented here. Versions follow
 semver; the plugin id is `io.github.muzimu217.session-import`.
 
+## 0.4.1 — 2026-09-09
+
+- 补齐市场元数据以符合官方仓 CONTRIBUTING 的推荐字段：新增 `i18n`（en / zh-CN 双语的
+  name、description、safetyNotes）、`categories`、`changelog`、`safetyNotes`。
+- `engines.piDesktop` 由 `>=0.14.0` 上调为 `>=0.14.3`，与官方仓内同类社区插件一致
+  （宿主实测版本 0.14.6-rc.3）。
+- 无功能变更。
+
 ## 0.4.0 — 2026-09-09
 
 - 新增**会话熔炉**（`views/forge.html`，工作面板视图 `session-forge`）：

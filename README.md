@@ -49,10 +49,19 @@ PI-Desktop 插件：**扫描本机安装的编程工具，把它们（ZCode、Wo
 
 ## 权限
 
-仅需 `ui.panel` / `ui.view`。读取本地数据由插件进程只读完成；**导入**经由宿主
-`session.import` 桥接完成（该通道为插件宿主的新增底层 API 提案，见
-[PI-Desktop#134](https://github.com/vastsa/PI-Desktop/issues/134)），插件自身不申请
-任何文件系统写权限、不联网。
+| 权限 | 用途 |
+| --- | --- |
+| `ui.panel` / `ui.view` | 导入面板与「会话熔炉」工作面板视图 |
+| `session.read` / `session.read.own` | 读回本插件导入过的会话，供熔炉蒸馏 |
+| `agent.complete` / `models.list` | 调用宿主模型做蒸馏（使用宿主凭据与额度，插件不接触 API Key） |
+| `fs.write` | **仅**用于保存蒸馏结果，范围限定在工作区内的 `AGENTS.md`、`*.md`、`docs/**`、`.agents/skills/**` |
+
+读取各工具本地数据由插件进程**只读**完成（`node:sqlite` 的 `readOnly` 模式，或直接读取
+`.jsonl`）。**导入**经由宿主 `session.import` 通道完成（该通道为插件宿主新增的底层 API
+提案，见 [PI-Desktop#134](https://github.com/vastsa/PI-Desktop/issues/134)）。
+
+插件不发起任何网络请求、无遥测上报；熔炉调用走宿主 `pi.agent.complete`，凭据保留在
+Electron 主进程。
 
 ## 开发
 
