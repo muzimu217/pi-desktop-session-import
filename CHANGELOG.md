@@ -3,6 +3,44 @@
 All notable changes to this plugin are documented here. Versions follow
 semver; the plugin id is `io.github.muzimu217.session-import`.
 
+## 0.4.4 — 2026-09-10
+
+- **修复：`导入失败：toolResult exceeds 256 KiB`（整批被拒）**。
+  根因是**字节口径不一致**：宿主校验的是
+  `TextEncoder().encode(JSON.stringify(field)).byteLength`（**序列化后**字节），
+  而插件此前全部按**原始字符串**字节截断。JSON 转义会让引号/换行/反斜杠
+  密集的文本膨胀最多约 **44%**（实测 250000 原始字节 → 361113 序列化字节），
+  因此一条按 256 KiB 原始截断的字段序列化后仍可达 ~365 KiB，单条超限
+  即导致**整批**被拒绝。
+  - 真实数据命中：某 WorkBuddy 会话的 `toolResult`（一段 grep 输出）
+    原始 406 KB，按旧逻辑截断后仍有 289 KB，依旧超限。
+  - 修法：新增 `serializedBytes()` / `truncateToSerializedBytes()`，
+    `content`（512 KiB）与 `toolArgs` / `toolResult`（256 KiB）一律按
+    **序列化后**字节做预算；另加 `enforceContractLimits()` 兜底，在发出前
+    按宿主的口径逐字段复测并硬夹紧——**一条脏数据绝不能让用户丢掉整批**。
+  - 新增回归测试（引号/换行密集的超限样例）：旧代码报
+    `content ... got 747522`，新代码通过。真机复测：此前必失败的
+    652 条消息 WorkBuddy 会话现产出 5.3 MB 载荷、**0 项契约违规**；
+    四来源 80 条会话全部通过，最差字段恰好落在 255 KiB / 406 KiB。
+
+- **性能：扫描阶段大幅提速**（此前面板首屏等待 20s+，实测瓶颈不在导入
+  而在扫描）：
+  - **Codex**：`~/.codex/sessions` 常有数百个多 MB 的 rollout
+    （实测 864 文件 / 2.6 GB / 58.3 万行），旧逻辑对每个文件
+    `readFile` + 全行 `JSON.parse`。现改为**流式读取 + 提前中止**，
+    只读到「会话 id + cwd + 首条真实用户消息」即停（55 MB 的文件只读
+    约 0.2% 字节）；并新增 `scanFast()` 快速首屏（近 14 天窗口，
+    0.43 s 出结果），全量扫描在后台补齐。
+  - **WorkBuddy**：`summarizeFile()` 流式替代 `readFile` + `split`
+    （列表行需要文件尾部的 ai-title 与最后时间戳，无法提前中止，
+    收益体现在内存与分配开销），并改为跨文件并发。
+  - **Claude Code**：流式扫描（上一提交已落地）。
+  - 后台全量扫描改为**排队**，只在所有前台扫描结束后启动——实测若并发，
+    Codex 的 2.6 GB 后台扫描会把同时进行的 WorkBuddy 扫描从 1.7 s
+    拖慢到 9.5 s。
+  - 效果：六来源并行首屏 **2.6 s** 全部就绪；Codex 首屏 **0.43 s**，
+    后台约 10 s 补齐全量 776 条。
+
 ## 0.4.3 — 2026-09-10
 
 - **修复：导入的会话在左侧项目列表不可见**。宿主侧栏语义（对照 v0.14.1 与
