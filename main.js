@@ -303,10 +303,14 @@ async function recordHistory(entry) {
 
 /**
  * Scan a source. Adapters may expose `scanFast()` for a cheap first pass (the
- * Codex adapter does: its rollout tree can hold hundreds of multi-MB files).
- * When one exists we return that immediately, mark the entry `partial`, and
- * kick off the full scan in the background; the panel re-asks with
- * `{ full: true }` (or simply calls again) once it wants the complete list.
+ * Codex adapter does: its rollout tree can hold hundreds of multi-MB
+ * transcripts). When one exists we return that immediately, mark the entry
+ * `partial`, and queue the full scan for later.
+ *
+ * The full scan is deliberately NOT started while other sources are still
+ * scanning: it reads GBs off the same disk and starves the panels the user is
+ * actually waiting on (measured: a concurrent WorkBuddy scan went 1.7s → 9.5s
+ * behind Codex's background pass). It runs once the foreground queue drains.
  */
 async function scanSource(payload) {
   const source = String(payload?.source ?? "");
@@ -330,6 +334,7 @@ async function scanSource(payload) {
   const useFast = !wantsFull && typeof adapter.scanFast === "function" && !cache.has(source);
   let sessions = [];
   let error = null;
+  foregroundScans += 1;
   try {
     sessions = await (useFast ? adapter.scanFast() : adapter.scan());
   } catch (e) {
@@ -338,14 +343,16 @@ async function scanSource(payload) {
       message: String(e?.message ?? e),
     };
     sessions = [];
+  } finally {
+    foregroundScans -= 1;
   }
   cache.set(source, sessions);
   cacheError.set(source, error);
   cachePartial.set(source, useFast);
   if (useFast) {
-    // Warm the full list without blocking the panel; a later call serves it
-    // straight from the cache.
-    void warmFullScan(source, adapter);
+    pendingFullScans.push({ source, adapter });
+    // A later call serves the completed list straight from the cache.
+    scheduleFullScans();
   }
   return {
     source,
@@ -354,6 +361,15 @@ async function scanSource(payload) {
     error,
     partial: useFast,
   };
+}
+
+/** Run queued full scans once no foreground scan is outstanding. */
+function scheduleFullScans() {
+  if (foregroundScans > 0 || pendingFullScans.length === 0) return;
+  const next = pendingFullScans.shift();
+  void warmFullScan(next.source, next.adapter).finally(() => {
+    if (pendingFullScans.length > 0) scheduleFullScans();
+  });
 }
 
 /** Background full scan used to promote a partial result to a complete one. */
@@ -376,6 +392,8 @@ async function warmFullScan(source, adapter) {
 
 const cachePartial = new Map();
 const fullScanInFlight = new Set();
+const pendingFullScans = [];
+let foregroundScans = 0;
 
 // Parallel cache for scan errors so re-asking the same source preserves the
 // original failure (avoid failing twice); never expires alongside the
