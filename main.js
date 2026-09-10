@@ -381,6 +381,61 @@ const CONTRACT = {
   messagesMax: 2000, // official LIMIT_EXCEEDED guard (origin/main plugin-runtime)
 };
 
+// The host measures every size limit in UTF-8 BYTES
+// (plugin-runtime.ts: new TextEncoder().encode(content).byteLength), not in
+// UTF-16 code units. CJK / emoji messages weigh 3-4 bytes per character, so a
+// naive `String.slice(0, 512 * 1024)` can be 3x over the limit and the host
+// rejects the whole batch with "message content exceeds 512 KiB". Keep a small
+// margin so encoding overhead on our side never tips it over.
+const SIZE_SAFETY_MARGIN = 1024;
+
+/**
+ * Truncate a string to at most `maxBytes` UTF-8 bytes without leaving a
+ * broken surrogate pair at the cut. Binary-search the boundary so huge
+ * transcripts (multi-MB tool results) stay cheap.
+ */
+const CONVERT_CONCURRENCY = 8;
+
+/** Run `worker` over `items` with bounded concurrency, preserving order. */
+async function mapWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let cursor = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor;
+      cursor += 1;
+      try {
+        results[index] = { ok: true, value: await worker(items[index]) };
+      } catch (error) {
+        results[index] = { ok: false, error };
+      }
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
+function truncateBytes(text, maxBytes) {
+  const value = String(text ?? "");
+  if (!value) return value;
+  const budget = Math.max(0, maxBytes - SIZE_SAFETY_MARGIN);
+  if (Buffer.byteLength(value, "utf8") <= budget) return value;
+  let lo = 0;
+  let hi = value.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (Buffer.byteLength(value.slice(0, mid), "utf8") <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  let cut = value.slice(0, lo);
+  // Drop a trailing lone high surrogate so the payload stays valid UTF-8.
+  if (cut.length > 0) {
+    const last = cut.charCodeAt(cut.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  }
+  return cut;
+}
+
 /**
  * Official validation (origin/main plugin-runtime.ts validatePluginSessionPayload)
  * rejects: empty/blank titles (>200 code points), missing externalId, non-RFC3339
@@ -440,8 +495,11 @@ function safeToolPayload(value) {
   if (value === null || value === undefined) return undefined;
   const simple = typeof value !== "object";
   const serialized = JSON.stringify(value);
-  if (serialized !== undefined && serialized.length > CONTRACT.toolPayloadMax) {
-    return serialized.slice(0, CONTRACT.toolPayloadMax);
+  if (
+    serialized !== undefined &&
+    Buffer.byteLength(serialized, "utf8") > CONTRACT.toolPayloadMax
+  ) {
+    return truncateBytes(serialized, CONTRACT.toolPayloadMax);
   }
   if (!simple && jsonDepth(value) > TOOL_PAYLOAD_DEPTH_MAX) return serialized;
   return value;
@@ -470,7 +528,7 @@ function toContractSession(item, conv, projectId) {
     prevMs = atMs;
     const msg = {
       role: m.role,
-      content: String(m.content ?? "").slice(0, CONTRACT.contentMax),
+      content: truncateBytes(m.content ?? "", CONTRACT.contentMax),
       createdAt: toIso(atMs),
     };
     if (m.role === "tool") {
@@ -539,25 +597,35 @@ async function commitOfficial(source, items, placement) {
   if (!adapter) throw new Error(`unknown source: ${source}`);
   const bindProjects = placement === "project";
 
+  // Conversion is dominated by file IO (whole transcripts are read and
+  // parsed), so run it with a small concurrency pool instead of serially —
+  // a 60-session Claude Code import dropped from ~50s to a few seconds.
+  const startedAt = Date.now();
+  const converted = await mapWithConcurrency(items, CONVERT_CONCURRENCY, (item) =>
+    adapter.convert(item),
+  );
+  const convertedAt = Date.now();
+
   const contractSessions = [];
   let unreadable = 0;
-  for (const item of items) {
-    try {
-      const conv = await adapter.convert(item);
-      if (contractViolation(item, conv)) {
-        unreadable += 1; // skip poisoned item instead of failing the batch
-        continue;
-      }
-      // Opt-in project binding: only resolve a host projectId when the user
-      // asked for project grouping (placement: "project"). Default keeps
-      // sessions in the standalone list, visible in the sidebar right away.
-      const projectId = bindProjects
-        ? await resolveProjectId(conv.session.projectPath)
-        : null;
-      contractSessions.push(toContractSession(item, conv, projectId));
-    } catch {
+  for (let i = 0; i < items.length; i += 1) {
+    const outcome = converted[i];
+    if (!outcome?.ok) {
       unreadable += 1;
+      continue;
     }
+    const conv = outcome.value;
+    if (contractViolation(items[i], conv)) {
+      unreadable += 1; // skip poisoned item instead of failing the batch
+      continue;
+    }
+    // Opt-in project binding: only resolve a host projectId when the user
+    // asked for project grouping (placement: "project"). Kept serial (and
+    // memoized) so project.create stays idempotent and race-free.
+    const projectId = bindProjects
+      ? await resolveProjectId(conv.session.projectPath)
+      : null;
+    contractSessions.push(toContractSession(items[i], conv, projectId));
   }
 
   let imported = 0;
@@ -574,12 +642,20 @@ async function commitOfficial(source, items, placement) {
       }
     }
   }
+  const finishedAt = Date.now();
   // P0-F1: record this batch on the cross-view bus so the forge view can
   // surface a "just imported N sessions" hint on next refresh.
   if (imported > 0) {
     bus.recordImport({ count: imported, source });
   }
-  return { ok: failed.length === 0, imported, skipped, failed, unreadable };
+  return {
+    ok: failed.length === 0,
+    imported,
+    skipped,
+    failed,
+    unreadable,
+    timings: { convertMs: convertedAt - startedAt, importMs: finishedAt - convertedAt },
+  };
 }
 
 /**

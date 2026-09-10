@@ -736,6 +736,14 @@
           if (r.unreadable) parts.push(t("importer.unreadable", { count: r.unreadable }));
           if (r.failed?.length) parts.push(t("importer.failed", { count: r.failed.length }));
           if (r.imported === 0 && r.failed?.length) parts.push(t("importer.hostHint"));
+          if (r.timings) {
+            parts.push(
+              t("importer.importDone.timing", {
+                total: ((r.timings.convertMs + r.timings.importMs) / 1000).toFixed(1),
+                convert: (r.timings.convertMs / 1000).toFixed(1),
+              }),
+            );
+          }
           parts.push(
             $("bind-projects").checked
               ? t("importer.importDone.project")
