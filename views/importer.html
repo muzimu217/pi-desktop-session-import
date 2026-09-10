@@ -295,6 +295,8 @@
         overflow-wrap: anywhere;
       }
       footer.bar { display: flex; align-items: center; gap: 10px; }
+      .bind-opt { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-size: 12px; cursor: pointer; white-space: nowrap; }
+      .bind-opt input { accent-color: var(--accent, #4c8dff); cursor: pointer; }
       #status { color: var(--muted); font-size: 12px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       #status.ok { color: var(--ok); }
       #status.err { color: var(--err); }
@@ -339,6 +341,10 @@
 
       <footer class="bar" data-page-node-id="ApsTMyHNvjshRWqpbWubS4">
         <span class="count" id="count" data-page-node-id="booAhN6l1hmSgYohOWmZcb">已选 0 / 0</span>
+        <label class="bind-opt" id="bind-opt" title="勾选后按项目归组导入；不勾选则进入左侧会话列表，立即可见">
+          <input type="checkbox" id="bind-projects" />
+          <span id="bind-projects-label">归组到项目</span>
+        </label>
         <button id="import-btn" disabled data-page-node-id="mw8vcteK4JbYMjpEe9OUAd">导入为会话</button>
         <span id="status" data-page-node-id="tUbxRmOH70DWLBHl8T0pLD"></span>
       </footer>
@@ -385,6 +391,10 @@
         if (pe) pe.textContent = t("importer.previewEmpty");
         const imp = $("import-btn");
         if (imp) imp.textContent = t("importer.import");
+        const bindLabel = $("bind-projects-label");
+        if (bindLabel) bindLabel.textContent = t("importer.bindProjects");
+        const bindOpt = $("bind-opt");
+        if (bindOpt) bindOpt.title = t("importer.bindProjects.hint");
       }
       async function initLocale() {
         try {
@@ -719,13 +729,18 @@
           const r = await bridge.invoke("import.commit", {
             source: state.activeSource,
             items: summaries,
+            placement: $("bind-projects").checked ? "project" : "standalone",
           });
           const parts = [t("importer.imported", { count: r.imported })];
           if (r.skipped) parts.push(t("importer.skipped", { count: r.skipped }));
           if (r.unreadable) parts.push(t("importer.unreadable", { count: r.unreadable }));
           if (r.failed?.length) parts.push(t("importer.failed", { count: r.failed.length }));
           if (r.imported === 0 && r.failed?.length) parts.push(t("importer.hostHint"));
-          parts.push(t("importer.importDone.tail"));
+          parts.push(
+            $("bind-projects").checked
+              ? t("importer.importDone.project")
+              : t("importer.importDone.tail"),
+          );
           setStatus(parts.join(SEP()), r.failed?.length ? "err" : "ok");
           // P0-F2: native notification telling the user to switch to the
           // forge view. pluginBridge cannot reach pi.ui.* from the sandboxed
@@ -747,6 +762,18 @@
 
       $("scan-btn").addEventListener("click", scanSources);
       $("import-btn").addEventListener("click", importSelected);
+      // Opt-in project grouping: default OFF so imports land in the left
+      // sidebar's standalone list (visible immediately). Persist the choice.
+      const BIND_KEY = "pi-universal-import.bindProjects";
+      const bindBox = $("bind-projects");
+      try {
+        bindBox.checked = localStorage.getItem(BIND_KEY) === "1";
+      } catch { /* best-effort */ }
+      bindBox.addEventListener("change", () => {
+        try {
+          localStorage.setItem(BIND_KEY, bindBox.checked ? "1" : "0");
+        } catch { /* best-effort */ }
+      });
       $("filter").addEventListener("input", renderList);
       $("select-all").addEventListener("click", () => {
         const q = $("filter").value.trim().toLowerCase();

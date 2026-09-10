@@ -104,7 +104,8 @@ async function onPanelInvoke(channel, payload) {
       const official = officialSessionApi();
       if (official) {
         try {
-          return await commitOfficial(source, items);
+          const placement = payload?.placement === "project" ? "project" : "standalone";
+          return await commitOfficial(source, items, placement);
         } catch (e) {
           if (!hostLacksImportApi(e)) throw e; // genuine failure — surface it
           // host advertised importBatch but rejected the call → legacy bridge
@@ -495,10 +496,14 @@ function toContractSession(item, conv, projectId) {
     messages,
   };
   // Host contract: only an explicit host-created projectId binds the session
-  // to a project (PROJECTS view). projectPath alone stays as origin metadata
-  // and the session lands in the standalone SESSIONS list. Group imports by
-  // projectPath and pass the resolved id so sessions appear under their
-  // project in the sidebar.
+  // to a project. IMPORTANT sidebar semantics (verified on host source, both
+  // v0.14.1 and current main): the left sidebar only renders project groups
+  // for project tabs the user has actually opened (openProjectPaths) plus the
+  // active workspace; a bound session whose project has no open tab is
+  // visible nowhere in the sidebar (only on the Projects index page). An
+  // unbound session (projectId omitted) lands in the standalone SESSIONS
+  // list, which IS the left list users see immediately. So binding is opt-in
+  // ("placement: project"); the default keeps imports visible on arrival.
   if (projectId !== undefined && projectId !== null) session.projectId = projectId;
   return session;
 }
@@ -529,9 +534,10 @@ async function resolveProjectId(path) {
  * Convert + import the selected summaries through the official API.
  * Chunked at the contract batch limit; aggregates importBatch results.
  */
-async function commitOfficial(source, items) {
+async function commitOfficial(source, items, placement) {
   const adapter = getAdapter(source);
   if (!adapter) throw new Error(`unknown source: ${source}`);
+  const bindProjects = placement === "project";
 
   const contractSessions = [];
   let unreadable = 0;
@@ -542,9 +548,12 @@ async function commitOfficial(source, items) {
         unreadable += 1; // skip poisoned item instead of failing the batch
         continue;
       }
-      // Bind to a host project when the session carries a projectPath, so it
-      // shows up under PROJECTS instead of the standalone SESSIONS list.
-      const projectId = await resolveProjectId(conv.session.projectPath);
+      // Opt-in project binding: only resolve a host projectId when the user
+      // asked for project grouping (placement: "project"). Default keeps
+      // sessions in the standalone list, visible in the sidebar right away.
+      const projectId = bindProjects
+        ? await resolveProjectId(conv.session.projectPath)
+        : null;
       contractSessions.push(toContractSession(item, conv, projectId));
     } catch {
       unreadable += 1;
