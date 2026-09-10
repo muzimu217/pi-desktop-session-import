@@ -486,7 +486,7 @@
             card.classList.remove("dim");
             if (res.found) {
               const sc = card.querySelector(".scount");
-              sc.textContent = t("importer.count.sessions", { count: res.count });
+              paintCount(sc, res, adapter.source);
               sc.classList.add("ok");
             } else {
               card.querySelector(".scount").textContent = t("importer.source.notFound");
@@ -494,6 +494,45 @@
           }),
         );
         setStatus(t("importer.status.scanDone"), "ok");
+        // A partial result came from a cheap first pass; the plugin keeps
+        // scanning and updates the count in place once it is complete.
+        void refreshPartialSources(cards);
+      }
+
+      function paintCount(node, res, source) {
+        if (!node) return;
+        const base = t("importer.count.sessions", { count: res.count });
+        node.textContent = res.partial ? `${base} ${t("importer.count.scanningMore")}` : base;
+        node.dataset.source = source;
+      }
+
+      async function refreshPartialSources(cards) {
+        const partial = cards.filter(({ adapter }) => {
+          const info = state.sources.get(adapter.source);
+          return info?.partial === true;
+        });
+        if (!partial.length) return;
+        // The plugin promotes partial scans in the background; poll a few
+        // times so the card count settles without the user re-clicking.
+        for (let attempt = 0; attempt < 10; attempt += 1) {
+          await new Promise((r) => setTimeout(r, 1200));
+          let anyPartial = false;
+          await Promise.all(
+            partial.map(async ({ adapter, card }) => {
+              let res;
+              try {
+                res = await bridge.invoke("import.scanSource", { source: adapter.source });
+              } catch {
+                return;
+              }
+              state.sources.set(adapter.source, res);
+              const sc = card.querySelector(".scount");
+              paintCount(sc, res, adapter.source);
+              if (res.partial) anyPartial = true;
+            }),
+          );
+          if (!anyPartial) return;
+        }
       }
 
       function openSource(source) {
@@ -731,6 +770,7 @@
             items: summaries,
             placement: $("bind-projects").checked ? "project" : "standalone",
           });
+          window.__lastTimings = r.timings || null;
           const parts = [t("importer.imported", { count: r.imported })];
           if (r.skipped) parts.push(t("importer.skipped", { count: r.skipped }));
           if (r.unreadable) parts.push(t("importer.unreadable", { count: r.unreadable }));
@@ -739,8 +779,12 @@
           if (r.timings) {
             parts.push(
               t("importer.importDone.timing", {
-                total: ((r.timings.convertMs + r.timings.importMs) / 1000).toFixed(1),
+                total: (
+                  (r.timings.convertMs + r.timings.buildMs + r.timings.importMs) /
+                  1000
+                ).toFixed(1),
                 convert: (r.timings.convertMs / 1000).toFixed(1),
+                host: (r.timings.importMs / 1000).toFixed(1),
               }),
             );
           }

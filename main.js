@@ -301,21 +301,37 @@ async function recordHistory(entry) {
   return entries.length;
 }
 
+/**
+ * Scan a source. Adapters may expose `scanFast()` for a cheap first pass (the
+ * Codex adapter does: its rollout tree can hold hundreds of multi-MB files).
+ * When one exists we return that immediately, mark the entry `partial`, and
+ * kick off the full scan in the background; the panel re-asks with
+ * `{ full: true }` (or simply calls again) once it wants the complete list.
+ */
 async function scanSource(payload) {
   const source = String(payload?.source ?? "");
   const adapter = getAdapter(source);
   if (!adapter) throw new Error(`unknown source: ${source}`);
-  if (cache.has(source)) {
+  const wantsFull = payload?.full === true;
+  if (cache.has(source) && !wantsFull) {
     const sessions = cache.get(source);
     // Cached entries keep their original error (frozen at scan time) so the
     // panel can still show why the first scan failed.
     const error = cacheError.get(source) ?? null;
-    return { source, found: sessions.length > 0, count: sessions.length, error };
+    return {
+      source,
+      found: sessions.length > 0,
+      count: sessions.length,
+      error,
+      partial: cachePartial.get(source) === true,
+    };
   }
+
+  const useFast = !wantsFull && typeof adapter.scanFast === "function" && !cache.has(source);
   let sessions = [];
   let error = null;
   try {
-    sessions = await adapter.scan();
+    sessions = await (useFast ? adapter.scanFast() : adapter.scan());
   } catch (e) {
     error = {
       code: e?.code ?? "UNKNOWN",
@@ -325,8 +341,41 @@ async function scanSource(payload) {
   }
   cache.set(source, sessions);
   cacheError.set(source, error);
-  return { source, found: sessions.length > 0, count: sessions.length, error };
+  cachePartial.set(source, useFast);
+  if (useFast) {
+    // Warm the full list without blocking the panel; a later call serves it
+    // straight from the cache.
+    void warmFullScan(source, adapter);
+  }
+  return {
+    source,
+    found: sessions.length > 0,
+    count: sessions.length,
+    error,
+    partial: useFast,
+  };
 }
+
+/** Background full scan used to promote a partial result to a complete one. */
+async function warmFullScan(source, adapter) {
+  if (fullScanInFlight.has(source)) return;
+  fullScanInFlight.add(source);
+  try {
+    const sessions = await adapter.scan();
+    cache.set(source, sessions);
+    cachePartial.set(source, false);
+    if (typeof pi?.events?.emit === "function") {
+      pi.events.emit("import.scanReady", { source, count: sessions.length });
+    }
+  } catch {
+    // Leave the partial list in place; the next explicit scan retries.
+  } finally {
+    fullScanInFlight.delete(source);
+  }
+}
+
+const cachePartial = new Map();
+const fullScanInFlight = new Set();
 
 // Parallel cache for scan errors so re-asking the same source preserves the
 // original failure (avoid failing twice); never expires alongside the
@@ -605,6 +654,20 @@ async function commitOfficial(source, items, placement) {
     adapter.convert(item),
   );
   const convertedAt = Date.now();
+  const convertMs = convertedAt - startedAt;
+
+  // Opt-in project binding: resolve each host projectId once per distinct
+  // path (memoized inside resolveProjectId), so project.create stays
+  // idempotent. Done before the (synchronous) payload assembly below so the
+  // byte-costly truncation work stays off the await path.
+  if (bindProjects) {
+    const paths = new Set();
+    for (const outcome of converted) {
+      const path = outcome?.ok ? outcome.value?.session?.projectPath : null;
+      if (path) paths.add(path);
+    }
+    for (const path of paths) await resolveProjectId(path);
+  }
 
   const contractSessions = [];
   let unreadable = 0;
@@ -619,21 +682,22 @@ async function commitOfficial(source, items, placement) {
       unreadable += 1; // skip poisoned item instead of failing the batch
       continue;
     }
-    // Opt-in project binding: only resolve a host projectId when the user
-    // asked for project grouping (placement: "project"). Kept serial (and
-    // memoized) so project.create stays idempotent and race-free.
     const projectId = bindProjects
-      ? await resolveProjectId(conv.session.projectPath)
+      ? projectIdByPath.get(conv.session.projectPath) ?? null
       : null;
     contractSessions.push(toContractSession(items[i], conv, projectId));
   }
+  const builtAt = Date.now();
 
   let imported = 0;
   let skipped = 0;
   const failed = [];
+  const batchTimes = [];
   for (let i = 0; i < contractSessions.length; i += CONTRACT.batchSessionsMax) {
     const chunk = contractSessions.slice(i, i + CONTRACT.batchSessionsMax);
+    const bt = Date.now();
     const res = await officialSessionApi().importBatch({ source, sessions: chunk, mode: "skip" });
+    batchTimes.push({ n: chunk.length, ms: Date.now() - bt });
     imported += res.imported ?? 0;
     skipped += res.skipped ?? 0;
     for (const r of res.results ?? []) {
@@ -654,7 +718,12 @@ async function commitOfficial(source, items, placement) {
     skipped,
     failed,
     unreadable,
-    timings: { convertMs: convertedAt - startedAt, importMs: finishedAt - convertedAt },
+    timings: {
+      convertMs,
+      buildMs: builtAt - convertedAt,
+      importMs: finishedAt - builtAt,
+      batches: batchTimes,
+    },
   };
 }
 
