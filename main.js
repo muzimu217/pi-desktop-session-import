@@ -447,7 +447,7 @@ function safeToolPayload(value) {
 }
 
 /** Map one converted session onto the #169 `importBatch` input shape. */
-function toContractSession(item, conv) {
+function toContractSession(item, conv, projectId) {
   // createdAt ≤ updatedAt; invalid timestamps degrade to the session bound.
   const createdMs = parseIsoMs(
     conv.session.createdAt ?? item.createdAt,
@@ -484,7 +484,7 @@ function toContractSession(item, conv) {
     messages.push(msg);
   }
 
-  return {
+  const session = {
     externalId: String(item.externalId ?? conv.session.id).slice(0, CONTRACT.externalIdMax),
     title: String(conv.session.title ?? item.title ?? "").slice(0, CONTRACT.titleMax),
     projectPath: conv.session.projectPath ?? null,
@@ -494,6 +494,35 @@ function toContractSession(item, conv) {
     updatedAt,
     messages,
   };
+  // Host contract: only an explicit host-created projectId binds the session
+  // to a project (PROJECTS view). projectPath alone stays as origin metadata
+  // and the session lands in the standalone SESSIONS list. Group imports by
+  // projectPath and pass the resolved id so sessions appear under their
+  // project in the sidebar.
+  if (projectId !== undefined && projectId !== null) session.projectId = projectId;
+  return session;
+}
+
+/**
+ * Resolve (and memoize) a host project id per project path. The host's
+ * project.create is idempotent for an existing path (returns the same row),
+ * so calling it once per distinct path per import is safe.
+ */
+const projectIdByPath = new Map();
+async function resolveProjectId(path) {
+  if (!path) return null;
+  if (projectIdByPath.has(path)) return projectIdByPath.get(path);
+  let id = null;
+  if (typeof pi?.project?.create === "function") {
+    try {
+      const res = await pi.project.create({ path });
+      id = Number(res?.projectId ?? res?.id) || null;
+    } catch {
+      id = null; // host without project.create: fall back to unbound import
+    }
+  }
+  projectIdByPath.set(path, id);
+  return id;
 }
 
 /**
@@ -513,7 +542,10 @@ async function commitOfficial(source, items) {
         unreadable += 1; // skip poisoned item instead of failing the batch
         continue;
       }
-      contractSessions.push(toContractSession(item, conv));
+      // Bind to a host project when the session carries a projectPath, so it
+      // shows up under PROJECTS instead of the standalone SESSIONS list.
+      const projectId = await resolveProjectId(conv.session.projectPath);
+      contractSessions.push(toContractSession(item, conv, projectId));
     } catch {
       unreadable += 1;
     }

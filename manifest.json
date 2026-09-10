@@ -173,6 +173,7 @@
     "session.read",
     "session.read.own",
     "session.import",
+    "project.create",
     "agent.complete",
     "models.list",
     "fs.read",
