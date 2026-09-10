@@ -3,6 +3,31 @@
 All notable changes to this plugin are documented here. Versions follow
 semver; the plugin id is `io.github.muzimu217.session-import`.
 
+## 0.4.2（未发布）— 2026-09-10
+
+- **适配官方 `pi.session.importBatch` 正式版**（vastsa/PI-Desktop #169，提交
+  a7e466fa / 8b9532cf / 15f1a440 已推 origin/main，宿主 schema v14）：
+  - 修正工具载荷深度护栏：官方校验器对**整个 batch 输入**计 JSON 深度
+    （≤8），`toolArgs` / `toolResult` 在输入中已嵌套 5 层，自身深度预算仅 3。
+    超深对象现在降级为字符串，一条脏数据不再污染整批（此前真实数据触发
+    `session JSON depth exceeds 8` 整批拒绝）。
+  - 逐条预检官方硬校验（title 非空 / externalId 非空），坏条目计为
+    unreadable 跳过而非令整批失败；消息数按官方上限 2000 截断。
+  - 导入统一走 `import.commit` 单一入口：官方 `importBatch` 优先，运行时
+    检测到宿主未接线（`host api not available` / `UNSUPPORTED` / 
+    `unknown channel`）自动回退旧 `session.import` 桥接（dev 宿主分支
+    feat/zcode-session-import），两者都不可用时给出明确中文指引。
+  - `lib/forge.js` 适配官方 `session.list` 的 `{ items }` 返回形状
+    （`sessionId` 投影到 `id`，兼容旧 `{ sessions }` 与裸数组）。
+- **真实 UI 端到端验证通过**（官方 origin/main 构建宿主 + CDP 驱动真实
+  交互）：六来源扫描（ZCode 68 / WorkBuddy 151 / Claude Code 62 / Codex
+  700+）→ 勾选 2 条 ZCode 会话 → `importBatch` 导入成功 →
+  `session_import_origins` 幂等键落库 → 侧栏即时刷新可见 → 点开会话完整
+  渲染；重复导入幂等跳过（已导入 0，跳过 2 重复）。证据截图
+  `docs/e2e-v04-*.png`。
+- 修复 dev 注册表权限滞后问题：宿主启动恢复插件沿用 registry 记录的权限
+  而非 manifest，需同步更新（`session.import` 等新权限方能放行）。
+
 ## 0.4.1 — 2026-09-09
 
 - 补齐市场元数据以符合官方仓 CONTRIBUTING 的推荐字段：新增 `i18n`（en / zh-CN 双语的

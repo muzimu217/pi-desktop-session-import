@@ -1,9 +1,11 @@
 // End-to-end harness for the official-session-API commit path (no host needed).
 import { createRequire } from "node:module";
 import assert from "node:assert";
+import { fileURLToPath } from "node:url";
+import { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
-const PLUGIN_DIR = "/Users/blackevil/dev/pi-desktop-session-import";
+const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 const importBatchCalls = [];
 const stubAdapter = {
