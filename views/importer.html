@@ -342,7 +342,7 @@
       <footer class="bar" data-page-node-id="ApsTMyHNvjshRWqpbWubS4">
         <span class="count" id="count" data-page-node-id="booAhN6l1hmSgYohOWmZcb">已选 0 / 0</span>
         <label class="bind-opt" id="bind-opt" title="勾选后按项目归组导入；不勾选则进入左侧会话列表，立即可见">
-          <input type="checkbox" id="bind-projects" />
+          <input type="checkbox" id="bind-projects" checked />
           <span id="bind-projects-label">归组到项目</span>
         </label>
         <button id="import-btn" disabled data-page-node-id="mw8vcteK4JbYMjpEe9OUAd">导入为会话</button>
@@ -762,12 +762,15 @@
 
       $("scan-btn").addEventListener("click", scanSources);
       $("import-btn").addEventListener("click", importSelected);
-      // Opt-in project grouping: default OFF so imports land in the left
-      // sidebar's standalone list (visible immediately). Persist the choice.
+      // Project grouping is the default: imported sessions belong under the
+      // project they came from, matching the left sidebar's PROJECTS list.
+      // Unchecked imports land in the standalone session list instead. The
+      // choice is remembered per panel.
       const BIND_KEY = "pi-universal-import.bindProjects";
       const bindBox = $("bind-projects");
       try {
-        bindBox.checked = localStorage.getItem(BIND_KEY) === "1";
+        const stored = localStorage.getItem(BIND_KEY);
+        bindBox.checked = stored === null ? true : stored === "1";
       } catch { /* best-effort */ }
       bindBox.addEventListener("change", () => {
         try {

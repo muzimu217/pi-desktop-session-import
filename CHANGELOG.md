@@ -5,23 +5,27 @@ semver; the plugin id is `io.github.muzimu217.session-import`.
 
 ## 0.4.3 — 2026-09-10
 
-- **修复：导入的会话在左侧列表不可见**。宿主侧栏语义（对照 v0.14.1 与
+- **修复：导入的会话在左侧项目列表不可见**。宿主侧栏语义（对照 v0.14.1 与
   最新 main 逐字一致）：侧栏项目组只由「用户打开过的项目 tab +
   当前工作区」创建；绑定了 projectId 的会话若其项目没有打开的 tab，
   则**在侧栏任何位置都不可见**（只能去「项目」索引页找）。上一版
   （0.4.2 引入的自动 project.create 绑定）因此把导入会话"藏"了起来。
   现在：
-  - 默认导入到**独立会话列表**（左侧立即可见，即 0.2.x 时代体验）；
-  - 面板底部新增「归组到项目」勾选项（记忆用户选择）：勾选后按
-    projectPath 调 `project.create` 幂等解析 projectId 并随会话传入，
-    会话归入项目分组；
+  - **默认归组到项目**（勾选项记忆用户选择）：按 projectPath 调
+    `project.create` 幂等解析 projectId 并随会话传入；配合宿主侧补丁
+    （dev 仓 feat/plugin-import-project-tabs 分支，源自当年
+    feat/zcode-session-import 的 c34c7927 移植到官方 importBatch 通道）
+    导入完成后宿主自动把接收项目加入侧栏项目 tab 并展开——会话即时
+    出现在左侧「项目」列表；
+  - 取消勾选则导入到独立会话列表（无需宿主补丁，立即可见）；
   - 导入完成提示按两种落点分别说明在哪里查看。
 - **补报 `notify` 权限**：manifest 此前未声明 `notify`，导入完成的
   原生通知实际一直在报 `PERMISSION_DENIED`（面板静默吞掉）。已补
   声明，需要用户在宿主中重新授权一次。
 - 隔离数据目录实例（`PI_DESKTOP_DATA_DIR` + 9224 CDP）真机验证：
-  默认导入 4 条 → DB `project_id` 为空 + 侧栏「会话」列表即时显示；
-  勾选归组导入 3 条 → DB `project_id` 正确绑定 `~/Work/club-web`。
+  归组导入 3 条 → `project_id` 绑定 `~/Work/club-web` + 侧栏「项目」
+  板块自动出现 club-web 组并展开（截图 docs/）；独立导入 4 条 →
+  `project_id` 为空 + 侧栏「会话」列表即时显示。
 
 ## 0.4.2（未发布）— 2026-09-10
 
