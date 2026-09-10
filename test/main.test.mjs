@@ -91,7 +91,14 @@ describe("F-10 import.scanSource — error observability (P0 of v0.5.0)", () => 
     ]);
     const main = freshMain();
     const r = await main.onPanelInvoke("import.scanSource", { source: "ok" });
-    assert.deepStrictEqual(r, { source: "ok", found: true, count: 1, error: null });
+    assert.deepStrictEqual(r, {
+      source: "ok",
+      found: true,
+      count: 1,
+      error: null,
+      // Adapters without scanFast() complete in one pass.
+      partial: false,
+    });
   });
 
   test("F-10: adapter.scan rejects with ERR (path-missing) -> returned shape carries `error`", async () => {

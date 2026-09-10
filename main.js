@@ -486,6 +486,57 @@ async function mapWithConcurrency(items, limit, worker) {
   return results;
 }
 
+/**
+ * Bytes a value occupies once the host re-serializes it.
+ *
+ * The host validates `TextEncoder().encode(JSON.stringify(value)).byteLength`,
+ * NOT the raw string length. JSON escaping inflates control characters, quotes
+ * and backslashes by up to ~44% (measured), so budgeting a 256 KiB *raw*
+ * string can still produce a >256 KiB serialized value and get the whole batch
+ * rejected with "toolResult exceeds 256 KiB".
+ */
+function serializedBytes(value) {
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized === undefined) return 0;
+    return Buffer.byteLength(serialized, "utf8");
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
+ * Truncate a string so its **JSON-serialized** form fits `maxBytes`.
+ *
+ * `serializedBytes` counts the value, so the shrinking is done by binary
+ * search on the serialized length rather than the raw byte length. Escaping can
+ * only shrink in proportion as characters are removed, so this converges.
+ */
+function truncateToSerializedBytes(text, maxBytes) {
+  const value = String(text ?? "");
+  if (!value) return value;
+  const budget = Math.max(0, maxBytes - SIZE_SAFETY_MARGIN);
+  if (serializedBytes(value) <= budget) return value;
+  let lo = 0;
+  let hi = value.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (serializedBytes(value.slice(0, mid)) <= budget) lo = mid;
+    else hi = mid - 1;
+  }
+  let cut = value.slice(0, lo);
+  // Drop a trailing lone high surrogate so the payload stays valid UTF-8.
+  if (cut.length > 0) {
+    const last = cut.charCodeAt(cut.length - 1);
+    if (last >= 0xd800 && last <= 0xdbff) cut = cut.slice(0, -1);
+  }
+  return cut;
+}
+
+/**
+ * Raw-byte truncation, for places that are NOT re-serialized by the host
+ * (nothing today — kept for callers that need a pure byte budget).
+ */
 function truncateBytes(text, maxBytes) {
   const value = String(text ?? "");
   if (!value) return value;
@@ -566,13 +617,20 @@ function safeToolPayload(value) {
   if (value === null || value === undefined) return undefined;
   const simple = typeof value !== "object";
   const serialized = JSON.stringify(value);
-  if (
-    serialized !== undefined &&
-    Buffer.byteLength(serialized, "utf8") > CONTRACT.toolPayloadMax
-  ) {
-    return truncateBytes(serialized, CONTRACT.toolPayloadMax);
+  if (serialized === undefined) return undefined;
+
+  if (Buffer.byteLength(serialized, "utf8") > CONTRACT.toolPayloadMax) {
+    // Oversized by raw measure. The host re-serializes whatever we send, so a
+    // truncated *string* must still fit once JSON escaping is applied — which
+    // can add ~44%. Truncating the stringified form as a string budgets
+    // against that escaped size directly.
+    return truncateToSerializedBytes(serialized, CONTRACT.toolPayloadMax);
   }
-  if (!simple && jsonDepth(value) > TOOL_PAYLOAD_DEPTH_MAX) return serialized;
+  if (!simple && jsonDepth(value) > TOOL_PAYLOAD_DEPTH_MAX) {
+    // Too deep for the host's depth budget; a string is depth-1. Guard its
+    // serialized size too, since stringifying may itself expand.
+    return truncateToSerializedBytes(serialized, CONTRACT.toolPayloadMax);
+  }
   return value;
 }
 
@@ -599,7 +657,10 @@ function toContractSession(item, conv, projectId) {
     prevMs = atMs;
     const msg = {
       role: m.role,
-      content: truncateBytes(m.content ?? "", CONTRACT.contentMax),
+      // Budgeted against the serialized size: the host measures
+      // JSON.stringify(content), which escaping can inflate well past the raw
+      // byte count.
+      content: truncateToSerializedBytes(m.content ?? "", CONTRACT.contentMax),
       createdAt: toIso(atMs),
     };
     if (m.role === "tool") {
@@ -634,6 +695,40 @@ function toContractSession(item, conv, projectId) {
   // list, which IS the left list users see immediately. So binding is opt-in
   // ("placement: project"); the default keeps imports visible on arrival.
   if (projectId !== undefined && projectId !== null) session.projectId = projectId;
+  return enforceContractLimits(session);
+}
+
+/**
+ * Last line of defence against the host's per-field limits.
+ *
+ * The host rejects the ENTIRE batch for one over-limit field, so a single
+ * pathological message would otherwise cost the user every session in the
+ * import. Everything above already truncates, but the limits are expressed in
+ * serialized bytes and escaping is easy to underestimate; this re-measures
+ * against exactly what the host computes and hard-clamps anything that still
+ * does not fit.
+ */
+function enforceContractLimits(session) {
+  for (const message of session.messages) {
+    const contentBytes = serializedBytes(message.content);
+    if (contentBytes > CONTRACT.contentMax) {
+      message.content = truncateToSerializedBytes(
+        String(message.content ?? ""),
+        CONTRACT.contentMax,
+      );
+    }
+    if (message.role !== "tool") continue;
+    for (const field of ["toolArgs", "toolResult"]) {
+      const value = message[field];
+      if (value === undefined) continue;
+      const bytes = serializedBytes(value);
+      if (bytes <= CONTRACT.toolPayloadMax) continue;
+      // Truncate through the stringified form so the escaped size is what we
+      // budget against.
+      const serialized = JSON.stringify(value) ?? "";
+      message[field] = truncateToSerializedBytes(serialized, CONTRACT.toolPayloadMax);
+    }
+  }
   return session;
 }
 
