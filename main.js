@@ -345,6 +345,10 @@ async function scanSource(payload) {
     sessions = [];
   } finally {
     foregroundScans -= 1;
+    // Only the fast branch queues work, but any scan finishing can be the last
+    // one outstanding — e.g. Codex's fast pass returns first and queues, then
+    // Claude/WorkBuddy finish a second later and unblock the queue.
+    if (foregroundScans === 0) scheduleFullScans();
   }
   cache.set(source, sessions);
   cacheError.set(source, error);
