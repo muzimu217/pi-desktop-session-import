@@ -15,6 +15,7 @@
 "use strict";
 
 const { ADAPTERS, getAdapter } = require("./lib/registry");
+const forge = require("./lib/forge");
 
 /** Scan results cached per source so switching sources never rescans. */
 const cache = new Map();
@@ -28,10 +29,28 @@ async function onLoad() {
       await pi.ui.openPanel({ title: "一体化会话导入" });
     },
   });
+
+  // 熔炉是 docked view，不是独立窗口；命令只做提示与自检。
+  await pi.commands.register({
+    id: "session-forge.open",
+    title: "Session Forge: Distill Imported Sessions",
+    keywords: ["forge", "蒸馏", "distill", "规则", "skill"],
+    run: async () => {
+      const caps = forgeCapabilities();
+      const missing = Object.entries(caps).filter(([, v]) => !v).map(([k]) => k);
+      await pi.ui.showToast(
+        missing.length
+          ? `会话熔炉：宿主缺少 ${missing.join(", ")}，请升级或重新授权`
+          : "会话熔炉：在右侧工作面板打开「会话熔炉」",
+        missing.length ? "warn" : "info",
+      );
+    },
+  });
 }
 
 async function onUnload() {
   await pi.commands.unregister("session-import.open");
+  await pi.commands.unregister("session-forge.open");
 }
 
 async function onPanelInvoke(channel, payload) {
@@ -49,9 +68,93 @@ async function onPanelInvoke(channel, payload) {
     case "import.commit":
       if (!officialSessionApi()) throw new Error("official session API unavailable on this host");
       return commitOfficial(String(payload?.source ?? ""), Array.isArray(payload?.items) ? payload.items : []);
+    // --- Forge: 会话蒸馏（读回本插件导入的行 -> 宿主 one-shot 补全）---
+    case "forge.capabilities":
+      return forgeCapabilities();
+    case "forge.sessions":
+      return forgeSessions(payload);
+    case "forge.messages":
+      return forgeMessages(payload);
+    case "forge.models":
+      return forgeModels();
+    case "forge.distill":
+      return forgeDistill(payload);
+    case "forge.save":
+      return forgeSave(payload);
     default:
       throw new Error(`unknown channel: ${channel}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Forge — 会话熔炉
+// ---------------------------------------------------------------------------
+
+function forgeCapabilities() {
+  return {
+    listSessions: typeof pi?.session?.list === "function",
+    listMessages: typeof pi?.session?.listMessages === "function",
+    complete: typeof pi?.agent?.complete === "function",
+    models: typeof pi?.models?.list === "function",
+    writeText: typeof pi?.fs?.writeText === "function",
+  };
+}
+
+async function forgeSessions(payload) {
+  const sessions = await forge.listImported({
+    source: payload?.source ? String(payload.source) : undefined,
+    limit: payload?.limit,
+  });
+  return { sessions };
+}
+
+async function forgeMessages(payload) {
+  const sessionId = String(payload?.sessionId ?? "");
+  if (!sessionId) throw new Error("sessionId required");
+  const messages = await forge.readMessages(sessionId, { limit: payload?.limit });
+  return { sessionId, messages };
+}
+
+async function forgeModels() {
+  const rows = await pi.models.list();
+  return { models: Array.isArray(rows) ? rows : (rows?.models ?? []) };
+}
+
+async function forgeDistill(payload) {
+  const sessionIds = Array.isArray(payload?.sessionIds) ? payload.sessionIds : [];
+  if (sessionIds.length === 0) throw new Error("no sessions selected");
+
+  // 逐个取回消息；单会话失败不阻断整批。
+  const sessions = [];
+  let unreadable = 0;
+  for (const id of sessionIds) {
+    try {
+      const meta = payload?.sessions?.find((s) => String(s.id) === String(id)) ?? { id };
+      const messages = await forge.readMessages(String(id));
+      sessions.push({ ...meta, id: String(id), messages });
+    } catch {
+      unreadable += 1;
+    }
+  }
+  if (sessions.length === 0) throw new Error("selected sessions could not be read");
+
+  const result = await forge.distill({
+    sessions,
+    modelKey: payload?.modelKey || undefined,
+    thinkingLevel: payload?.thinkingLevel || undefined,
+    goal: payload?.goal ? String(payload.goal) : undefined,
+  });
+
+  return { ok: true, distilled: result.text, usage: result.usage, unreadable };
+}
+
+async function forgeSave(payload) {
+  const path = String(payload?.path ?? "");
+  const content = String(payload?.content ?? "");
+  if (!path) throw new Error("path required");
+  if (!content.trim()) throw new Error("nothing to save");
+  await pi.fs.writeText(path, content);
+  return { ok: true, path, bytes: Buffer.byteLength(content, "utf8") };
 }
 
 async function scanSource(payload) {

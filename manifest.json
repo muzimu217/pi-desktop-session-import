@@ -2,8 +2,8 @@
   "schemaVersion": 1,
   "id": "io.github.muzimu217.session-import",
   "name": "Universal Session Import",
-  "version": "0.3.0",
-  "description": "一体化会话导入：扫描本机的 ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi，选择会话一键导入 PI-Desktop。Scan every local coding agent on this machine and import their conversations in one place.",
+  "version": "0.4.0",
+  "description": "一体化会话导入与熔炉：扫描本机的 ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi 并导入会话；再读回这些会话，用宿主额度蒸馏成项目约定与可复用做法。",
   "author": "muzimu217",
   "main": "main.js",
   "ui": {
@@ -17,12 +17,12 @@
   },
   "contributes": {
     "sessionSources": [
-      "zcode",
-      "workbuddy",
-      "claude-code",
-      "codex",
-      "opencode",
-      "pi"
+      { "id": "zcode", "label": { "en": "ZCode", "zh-CN": "ZCode" } },
+      { "id": "workbuddy", "label": { "en": "WorkBuddy", "zh-CN": "WorkBuddy" } },
+      { "id": "claude-code", "label": { "en": "Claude Code", "zh-CN": "Claude Code" } },
+      { "id": "codex", "label": { "en": "Codex", "zh-CN": "Codex" } },
+      { "id": "opencode", "label": { "en": "OpenCode", "zh-CN": "OpenCode" } },
+      { "id": "pi", "label": { "en": "Pi", "zh-CN": "Pi" } }
     ],
     "views": [
       {
@@ -34,6 +34,16 @@
         "icon": "list-checks",
         "entry": "views/importer.html",
         "order": 45
+      },
+      {
+        "id": "session-forge",
+        "title": {
+          "en": "Session Forge",
+          "zh-CN": "会话熔炉"
+        },
+        "icon": "sparkles",
+        "entry": "views/forge.html",
+        "order": 46
       }
     ],
     "commands": [
@@ -42,19 +52,59 @@
         "title": "Session Import: Open Panel",
         "keywords": ["import", "导入", "会话", "zcode", "workbuddy", "claude", "codex", "opencode"],
         "category": "Import"
+      },
+      {
+        "id": "session-forge.open",
+        "title": "Session Forge: Distill Imported Sessions",
+        "keywords": ["forge", "蒸馏", "distill", "规则", "AGENTS.md", "skill"],
+        "category": "Import"
+      }
+    ],
+    "settings": [
+      {
+        "key": "forgeOutputPath",
+        "title": "蒸馏输出路径",
+        "description": "相对于工作区根目录。写入范围受插件声明的 fs.write 限制。",
+        "type": "string",
+        "default": "AGENTS.md",
+        "scope": "plugin"
+      },
+      {
+        "key": "forgeThinkingLevel",
+        "title": "蒸馏推理强度",
+        "type": "select",
+        "default": "high",
+        "enum": [
+          { "label": "off", "value": "off" },
+          { "label": "low", "value": "low" },
+          { "label": "medium", "value": "medium" },
+          { "label": "high (recommended)", "value": "high" }
+        ],
+        "scope": "plugin"
       }
     ]
   },
   "permissions": [
     "ui.panel",
     "ui.view",
-    "session.read"
+    "session.read",
+    "session.read.own",
+    "agent.complete",
+    "models.list",
+    "fs.write"
   ],
+  "fs": {
+    "write": {
+      "root": "workspace",
+      "scope": ["AGENTS.md", "*.md", "docs/**", ".agents/skills/**"]
+    }
+  },
   "engines": {
     "piDesktop": ">=0.14.0"
   },
   "activationEvents": [
     "onCommand:session-import.open",
+    "onCommand:session-forge.open",
     "onStartup"
   ]
 }

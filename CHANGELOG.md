@@ -3,6 +3,23 @@
 All notable changes to this plugin are documented here. Versions follow
 semver; the plugin id is `io.github.muzimu217.session-import`.
 
+## 0.4.0 — 2026-09-09
+
+- 新增**会话熔炉**（`views/forge.html`，工作面板视图 `session-forge`）：
+  读回本插件导入过的会话，用宿主 `pi.agent.complete` 把它们蒸馏成项目约定、
+  已验证做法、反复出现的坑，一键写入工作区（默认 `AGENTS.md`）。
+- 新增 `lib/forge.js`：语料预算裁剪（均摊 + 单会话 200k 字符上限保护）、
+  ADR 0174 限速保护（8 次 / 60 秒滚动窗口）、补全返回形状兼容。
+- 新增宿主能力自检 `forge.capabilities`，缺能力时给出明确提示而非静默失败。
+- **`contributes.sessionSources` 修正为对象数组**：此前写的字符串数组被
+  `pi-plugin check` 拒绝。正确形状为 `{ id, label? }`，`id` 须匹配
+  `^[a-zA-Z][a-zA-Z0-9._-]{0,63}$`（见 `packages/plugin-sdk/src/index.ts`）。
+- 权限收敛：移除未使用的 `fs.read`，仅保留蒸馏落盘需要的 `fs.write`
+  （范围 `AGENTS.md`、`*.md`、`docs/**`、`.agents/skills/**`）。
+- 架构备注：熔炉必须长在本插件内。`plugin_sessions::list` 的 SQL 为
+  `WHERE oi.plugin_id = ?1`，任何插件只能读到自己导入的行，独立插件无法
+  读回宿主原生会话。
+
 ## 0.1.0 — 2026-09-09
 
 - 首个版本：一体化来源检测与导入。
