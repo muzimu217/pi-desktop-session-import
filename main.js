@@ -336,7 +336,8 @@ async function scanSource(payload) {
   let error = null;
   foregroundScans += 1;
   try {
-    sessions = await (useFast ? adapter.scanFast() : adapter.scan());
+    const scanFn = useFast ? adapter.scanFast : adapter.scan;
+    sessions = await withTimeout(() => scanFn.call(adapter), SCAN_TIMEOUT_MS, `${source}.scan`);
   } catch (e) {
     error = {
       code: e?.code ?? "UNKNOWN",
@@ -350,6 +351,13 @@ async function scanSource(payload) {
     // Claude/WorkBuddy finish a second later and unblock the queue.
     if (foregroundScans === 0) scheduleFullScans();
   }
+  // C-robustness: drop duplicate summaries (same source+externalId) so the
+  // panel never previews or imports the same session twice, and flag sessions
+  // that will hit the host's 2000-message cap so the UI can warn about likely
+  // truncation. The host is idempotent on externalId, but dedupe keeps the UI
+  // honest about what it will actually import.
+  const { deduped, oversizedCount } = dedupeSummaries(sessions, source);
+  sessions = deduped;
   cache.set(source, sessions);
   cacheError.set(source, error);
   cachePartial.set(source, useFast);
@@ -364,7 +372,30 @@ async function scanSource(payload) {
     count: sessions.length,
     error,
     partial: useFast,
+    oversized: oversizedCount,
   };
+}
+
+/**
+ * Pure helper backing {@link scanSource}: remove duplicate summaries by
+ * `source:externalId` and flag sessions whose `messageCount` exceeds the host's
+ * 2000-message cap (they will be truncated on import). Exported for tests.
+ */
+function dedupeSummaries(sessions, source) {
+  const seen = new Set();
+  const deduped = [];
+  let oversizedCount = 0;
+  for (const s of sessions) {
+    const key = `${s.source || source}:${s.externalId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (typeof s.messageCount === "number" && s.messageCount > CONTRACT.messagesMax) {
+      s.oversized = true;
+      oversizedCount += 1;
+    }
+    deduped.push(s);
+  }
+  return { deduped, oversizedCount };
 }
 
 /** Run queued full scans once no foreground scan is outstanding. */
@@ -381,7 +412,11 @@ async function warmFullScan(source, adapter) {
   if (fullScanInFlight.has(source)) return;
   fullScanInFlight.add(source);
   try {
-    const sessions = await adapter.scan();
+    const sessions = await withTimeout(
+      () => adapter.scan(),
+      FULL_SCAN_TIMEOUT_MS,
+      `${source}.scanFull`,
+    );
     cache.set(source, sessions);
     cachePartial.set(source, false);
     if (typeof pi?.events?.emit === "function") {
@@ -421,7 +456,11 @@ async function convertBatch(payload) {
   let unreadable = 0;
   for (const item of items) {
     try {
-      const conv = await adapter.convert(item);
+      const conv = await withTimeout(
+        () => adapter.convert(item),
+        CONVERT_TIMEOUT_MS,
+        `${source}.convert`,
+      );
       // Host UiMessage requires an id on every message; adapters describe
       // content only, so allocate ids here in one place.
       conv.messages = conv.messages.map((m) => ({
@@ -484,6 +523,56 @@ async function mapWithConcurrency(items, limit, worker) {
   });
   await Promise.all(runners);
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// Timeout watchdog — C: a single source's scan/convert must never be able to
+// hang the whole panel. A hung `adapter.scan()` (corrupt 224MB db, a network-
+// mounted transcript, an un-closed read stream) would otherwise leave
+// `foregroundScans` permanently > 0, which blocks `scheduleFullScans()` from
+// ever firing and freezes the "scanning" spinner forever. We race every
+// scan/convert against a deadline and surface a clean TIMEOUT error instead.
+// ---------------------------------------------------------------------------
+
+const SCAN_TIMEOUT_MS = 90 * 1000; // foreground scan (user is waiting on it)
+const FULL_SCAN_TIMEOUT_MS = 5 * 60 * 1000; // background full pass (non-blocking)
+const CONVERT_TIMEOUT_MS = 30 * 1000; // one session's convert
+
+/** Error raised when a guarded operation exceeds its deadline. */
+class TimeoutError extends Error {
+  constructor(label, ms) {
+    super(`${label} 在 ${ms}ms 内未完成（已超时）`);
+    this.code = "TIMEOUT";
+    this.name = "TimeoutError";
+  }
+}
+
+/**
+ * Run `factory()` and reject after `ms` if it has not settled.
+ *
+ * Adapters are a mix of sync (`zcode.scan` reads the DB synchronously) and
+ * async (`workbuddy.scan` fans out over the filesystem). A synchronous return
+ * cannot be interrupted — but those paths are bounded DB reads, not the hang
+ * risk — so we pass it through untouched. Only genuine promises are raced.
+ *
+ * The underlying promise is intentionally NOT aborted (Node has no cheap way to
+ * cancel arbitrary I/O); we merely stop waiting on it. It keeps running
+ * read-only in the background and is harmless once the panel has moved on.
+ */
+function withTimeout(factory, ms, label) {
+  let result;
+  try {
+    result = factory();
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  if (!result || typeof result.then !== "function") return Promise.resolve(result);
+  if (!Number.isFinite(ms) || ms <= 0) return result;
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new TimeoutError(label, ms)), ms);
+  });
+  return Promise.race([result, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -692,7 +781,12 @@ function toContractSession(item, conv, projectId) {
   // (projectId omitted) lands in the standalone SESSIONS list. Binding remains
   // opt-in ("placement: project").
   if (projectId !== undefined && projectId !== null) session.projectId = projectId;
-  return enforceContractLimits(session);
+  const enforced = enforceContractLimits(session);
+  // A session whose message count was capped at the host's 2000-message hard
+  // limit also lost content, so flag it as truncated alongside the byte-cap
+  // case so the user gets warned either way.
+  const messageCapped = conv.messages.length > messages.length;
+  return { session: enforced.session, truncated: enforced.truncated || messageCapped };
 }
 
 /**
@@ -706,6 +800,7 @@ function toContractSession(item, conv, projectId) {
  * does not fit.
  */
 function enforceContractLimits(session) {
+  let truncated = false;
   for (const message of session.messages) {
     const contentBytes = serializedBytes(message.content);
     if (contentBytes > CONTRACT.contentMax) {
@@ -713,6 +808,7 @@ function enforceContractLimits(session) {
         String(message.content ?? ""),
         CONTRACT.contentMax,
       );
+      truncated = true;
     }
     if (message.role !== "tool") continue;
     for (const field of ["toolArgs", "toolResult"]) {
@@ -724,9 +820,10 @@ function enforceContractLimits(session) {
       // budget against.
       const serialized = JSON.stringify(value) ?? "";
       message[field] = truncateToSerializedBytes(serialized, CONTRACT.toolPayloadMax);
+      truncated = true;
     }
   }
-  return session;
+  return { session, truncated };
 }
 
 /**
@@ -765,7 +862,7 @@ async function commitOfficial(source, items, placement) {
   // a 60-session Claude Code import dropped from ~50s to a few seconds.
   const startedAt = Date.now();
   const converted = await mapWithConcurrency(items, CONVERT_CONCURRENCY, (item) =>
-    adapter.convert(item),
+    withTimeout(() => adapter.convert(item), CONVERT_TIMEOUT_MS, `${source}.convert`),
   );
   const convertedAt = Date.now();
   const convertMs = convertedAt - startedAt;
@@ -785,6 +882,7 @@ async function commitOfficial(source, items, placement) {
 
   const contractSessions = [];
   let unreadable = 0;
+  let truncated = 0; // sessions that lost content to the host's byte caps
   for (let i = 0; i < items.length; i += 1) {
     const outcome = converted[i];
     if (!outcome?.ok) {
@@ -799,7 +897,9 @@ async function commitOfficial(source, items, placement) {
     const projectId = bindProjects
       ? projectIdByPath.get(conv.session.projectPath) ?? null
       : null;
-    contractSessions.push(toContractSession(items[i], conv, projectId));
+    const built = toContractSession(items[i], conv, projectId);
+    contractSessions.push(built.session);
+    if (built.truncated) truncated += 1;
   }
   const builtAt = Date.now();
 
@@ -832,6 +932,7 @@ async function commitOfficial(source, items, placement) {
     skipped,
     failed,
     unreadable,
+    truncated,
     timings: {
       convertMs,
       buildMs: builtAt - convertedAt,
@@ -860,7 +961,11 @@ async function commitLegacy(source, items) {
   const failed = [];
   for (const item of items) {
     try {
-      const conv = await adapter.convert(item);
+      const conv = await withTimeout(
+        () => adapter.convert(item),
+        CONVERT_TIMEOUT_MS,
+        `${source}.convert`,
+      );
       const messages = (conv.messages || []).map((m) => ({ id: crypto.randomUUID(), ...m }));
       const res = await pi.session.import({ session: conv.session, messages });
       if (res?.imported) imported += 1;
@@ -878,4 +983,10 @@ module.exports = {
   onLoad,
   onUnload,
   onPanelInvoke,
+  // Exported for the self-test harness (tools/selftest-sources.cjs).
+  withTimeout,
+  dedupeSummaries,
+  enforceContractLimits,
+  toContractSession,
+  truncateToSerializedBytes,
 };

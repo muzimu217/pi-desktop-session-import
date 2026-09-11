@@ -488,6 +488,14 @@
               const sc = card.querySelector(".scount");
               paintCount(sc, res, adapter.source);
               sc.classList.add("ok");
+            } else if (res.error && res.error.code === "TIMEOUT") {
+              const sc = card.querySelector(".scount");
+              sc.textContent = t("importer.source.scanTimeout");
+              sc.classList.add("warn");
+            } else if (res.error) {
+              const sc = card.querySelector(".scount");
+              sc.textContent = t("importer.source.scanFailed");
+              sc.classList.add("warn");
             } else {
               card.querySelector(".scount").textContent = t("importer.source.notFound");
             }
@@ -503,6 +511,10 @@
         if (!node) return;
         const base = t("importer.count.sessions", { count: res.count });
         node.textContent = res.partial ? `${base} ${t("importer.count.scanningMore")}` : base;
+        if (res.oversized > 0) {
+          node.textContent += ` ${t("importer.count.oversized", { count: res.oversized })}`;
+          node.classList.add("warn");
+        }
         node.dataset.source = source;
       }
 
@@ -775,6 +787,7 @@
           if (r.skipped) parts.push(t("importer.skipped", { count: r.skipped }));
           if (r.unreadable) parts.push(t("importer.unreadable", { count: r.unreadable }));
           if (r.failed?.length) parts.push(t("importer.failed", { count: r.failed.length }));
+          if (r.truncated) parts.push(t("importer.truncated", { count: r.truncated }));
           if (r.imported === 0 && r.failed?.length) parts.push(t("importer.hostHint"));
           if (r.timings) {
             parts.push(
@@ -793,7 +806,7 @@
               ? t("importer.importDone.project")
               : t("importer.importDone.tail"),
           );
-          setStatus(parts.join(SEP()), r.failed?.length ? "err" : "ok");
+          setStatus(parts.join(SEP()), r.failed?.length ? "err" : r.truncated ? "warn" : "ok");
           // P0-F2: native notification telling the user to switch to the
           // forge view. pluginBridge cannot reach pi.ui.* from the sandboxed
           // view, so we route through the host via a dedicated channel.
