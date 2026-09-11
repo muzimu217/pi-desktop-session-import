@@ -154,6 +154,38 @@ describe("driver: jsonl-transcript", () => {
     assert.deepEqual(tool.toolArgs, { cmd: "ls" });
   });
 
+  test("idFromEntry keeps a per-item id from shadowing the session id", async () => {
+    const root = dir();
+    // Codex: every response_item carries its own id, so a naive "first id wins"
+    // would name the session after an item instead of the session_meta line.
+    fs.writeFileSync(
+      path.join(root, "sess-3.jsonl"),
+      [
+        JSON.stringify({ timestamp: 1, type: "response_item", payload: { id: "item-1", type: "message", role: "user", content: [{ type: "input_text", text: "hi" }] } }),
+        JSON.stringify({ timestamp: 2, type: "session_meta", payload: { id: "sess-real", cwd: "/tmp" } }),
+      ].join("\n") + "\n",
+    );
+
+    const spec = {
+      driver: "jsonl-transcript",
+      root,
+      entry: {
+        unwrapPath: "payload",
+        rolePath: "role",
+        content: { blocks: { path: "content", typeField: "type", types: ["input_text"], textField: "text" } },
+        tsPath: "timestamp",
+      },
+      session: {
+        idFrom: { first: [{ path: "payload.id" }, { path: "id" }] },
+        idFromEntry: { path: "type", in: ["session_meta"] },
+        titleFrom: "firstUser",
+      },
+    };
+
+    const summaries = await jsonl.scan(spec, "mytest");
+    assert.equal(summaries[0].externalId, "sess-real");
+  });
+
   test("ignores malformed lines and returns [] for a missing root", async () => {
     const root = dir();
     fs.writeFileSync(path.join(root, "bad.jsonl"), "{not json\n\n" + JSON.stringify({ role: "user", content: "ok" }) + "\n");
@@ -296,6 +328,35 @@ describe("driver: sqlite-session", () => {
     assert.equal(messages[1].content, "file.txt");
     assert.equal(messages[2].content, "all done");
     assert.equal(session.modelId, "test-model");
+  });
+
+  test("orders by the app's own sequence column when it exists", async () => {
+    // ZCode writes a monotonic `sequence`; OpenCode has no such column. Rows
+    // here are inserted with deliberately misleading timestamps so only the
+    // sequence column can produce the right order.
+    const dir = makeDir("sqlite4");
+    const dbPath = path.join(dir, "seq.db");
+    const { DatabaseSync } = require("node:sqlite");
+    const db = new DatabaseSync(dbPath);
+    db.exec(`
+      CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT, title TEXT, time_created INTEGER, time_updated INTEGER);
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT, sequence INTEGER);
+      CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT, sequence INTEGER);
+    `);
+    db.prepare("INSERT INTO session VALUES (?,?,?,?,?)").run("s1", "/tmp/seq", "Seq", 1, 2);
+    db.prepare("INSERT INTO message VALUES (?,?,?,?,?)").run("m2", "s1", 500, JSON.stringify({ role: "assistant", time: { created: 500 } }), 2);
+    db.prepare("INSERT INTO message VALUES (?,?,?,?,?)").run("m1", "s1", 900, JSON.stringify({ role: "user", time: { created: 900 } }), 1);
+    db.prepare("INSERT INTO part VALUES (?,?,?,?,?,?)").run("p1", "m1", "s1", 1, JSON.stringify({ type: "text", text: "first by sequence" }), 1);
+    db.prepare("INSERT INTO part VALUES (?,?,?,?,?,?)").run("p2", "m2", "s1", 2, JSON.stringify({ type: "text", text: "second by sequence" }), 2);
+    db.close();
+
+    const summaries = await sqliteSession.scan(specFor(dbPath), "mysqlite");
+    const { messages } = await sqliteSession.convert(specFor(dbPath), summaries[0]);
+    assert.deepEqual(
+      messages.map((m) => m.content),
+      ["first by sequence", "second by sequence"],
+      "sequence wins over the out-of-order time_created",
+    );
   });
 
   test("returns [] when the database is absent", async () => {

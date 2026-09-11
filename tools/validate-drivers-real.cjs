@@ -34,10 +34,39 @@ const SPECS = [
       extension: ".jsonl",
       session: { idFrom: "filename", titleFrom: "firstUser", projectFrom: "parentDir", fallbackProject: "Claude Code" },
       entry: {
+        // Only conversation lines; .timelines/ and other sidecar records are
+        // not part of the transcript.
+        match: { path: "type", in: ["user", "assistant"] },
+        skipTypePath: "isSidechain",
+        skipTypes: [true],
         rolePath: "message.role",
         // content is a plain string in older entries and a block array in newer ones
         content: { blocks: { path: "message.content", typeField: "type", types: ["text"], textField: "text" } },
         tsPath: "timestamp",
+        // Claude injects synthetic user lines (caveats, reminders) as XML.
+        drop: { startsWith: ["<"], roles: ["user"] },
+        // tool_use blocks in an assistant message are answered by tool_result
+        // blocks in a later user message.
+        toolCall: {
+          callBlocks: {
+            path: "message.content",
+            typeField: "type",
+            type: "tool_use",
+            idPath: "id",
+            namePath: "name",
+            argsPath: "input",
+            roles: ["assistant"],
+          },
+          resultBlocks: {
+            path: "message.content",
+            typeField: "type",
+            type: "tool_result",
+            idPath: "tool_use_id",
+            resultPath: "content",
+            statusPath: "is_error",
+            roles: ["user"],
+          },
+        },
       },
     },
   },
@@ -51,19 +80,57 @@ const SPECS = [
       root: path.join(home, ".codex", "sessions"),
       recursive: true,
       extension: ".jsonl",
-      session: { idFrom: { path: "payload.id" }, titleFrom: "firstUser", projectFrom: "parentDir", fallbackProject: "Codex" },
+      // Codex keeps every rollout verbatim; three of them here exceed the
+      // driver's 32 MiB per-file default, which is a budget knob rather than
+      // a parsing difference — raise it to show they are reachable.
+      maxBytes: 128 * 1024 * 1024,
+      // New format carries the id in payload.id, the old bare header in id.
+      // Only session_meta holds the *session* id — every response_item has an
+      // id of its own.
+      session: {
+        idFrom: { first: [{ path: "payload.id" }, { path: "id" }] },
+        idFromEntry: { path: "type", in: ["session_meta"] },
+        titleFrom: "firstUser",
+        projectFrom: "parentDir",
+        fallbackProject: "Codex",
+      },
       entry: {
-        // Codex wraps everything in an event envelope
-        rolePath: "payload.role",
+        // New format wraps items in {timestamp, type, payload}; the old one
+        // writes them bare. unwrapPath handles both with one set of paths.
+        unwrapPath: "payload",
+        rolePath: "role",
+        roleMap: { user: "user", assistant: "assistant", system: "assistant", developer: "assistant" },
         content: {
           blocks: {
-            path: "payload.content",
+            path: "content",
             typeField: "type",
             types: ["input_text", "output_text", "text"],
             textField: "text",
           },
         },
         tsPath: "timestamp",
+        // Codex prepends synthetic user messages (repo instructions, env).
+        drop: { startsWith: ["<", "# AGENTS.md", "You are Codex"], roles: ["user"] },
+        toolCall: {
+          call: {
+            typePath: "type",
+            types: ["function_call"],
+            idPath: "call_id",
+            namePath: "name",
+            argsPath: "arguments",
+            argsJson: true,
+          },
+          result: {
+            typePath: "type",
+            types: ["function_call_output"],
+            idPath: "call_id",
+            resultPath: "output",
+            // codex.js keeps whatever the tool returned verbatim: a string
+            // as-is, anything else JSON-stringified. It never scans the
+            // payload for text blocks the way the other adapters do.
+            resultFormat: "json",
+          },
+        },
       },
     },
   },
@@ -80,10 +147,42 @@ const SPECS = [
       extension: ".jsonl",
       session: { idFrom: "filename", titleFrom: "firstUser", projectFrom: "parentDir", fallbackProject: "WorkBuddy" },
       entry: {
+        // conversation lines plus the two tool event kinds
+        match: { path: "type", in: ["message", "function_call", "function_call_result"] },
         rolePath: "role",
         content: { blocks: { path: "content", typeField: "type", types: ["input_text", "output_text", "text"], textField: "text" } },
         tsPath: "timestamp",
         tsUnit: "ms",
+        toolCall: {
+          call: {
+            typePath: "type",
+            types: ["function_call"],
+            idPath: "callId",
+            namePath: "name",
+            argsPath: "arguments",
+            argsJson: true,
+          },
+          result: {
+            typePath: "type",
+            types: ["function_call_result"],
+            idPath: "callId",
+            namePath: "name",
+            resultPath: "output",
+            statusPath: "status",
+            // Large outputs are truncated to a pointer on disk; the built-in
+            // adapter reads the real output back.
+            follow: { marker: "Full output saved to:", maxBytes: 4 * 1024 * 1024 },
+          },
+        },
+        // WorkBuddy wraps injected context (and the real query) in tags.
+        textOps: [
+          {
+            op: "stripXmlBlocks",
+            tags: ["system-reminder", "cb_summary", "conversation_history_summary"],
+            roles: ["user"],
+          },
+          { op: "extractXmlTag", tag: "user_query", roles: ["user"] },
+        ],
       },
     },
   },
@@ -126,7 +225,50 @@ const SPECS = [
   },
 ];
 
-const byId = (rows) => new Map(rows.map((r) => [String(r.externalId), r]));
+/**
+ * Key by id *and* file.
+ *
+ * Codex writes one rollout file per resume, so a session id legitimately maps
+ * to several files; keying on the id alone would silently compare two
+ * different files and report a difference that does not exist. For sqlite
+ * sources filePath is the (constant) db path, so this degrades to the id.
+ */
+const byId = (rows) =>
+  new Map(rows.map((r) => [`${String(r.externalId)}|${String(r.filePath ?? "")}`, r]));
+
+const SHOW_DIFF = process.argv.includes("--diff");
+const DIFF_SAMPLE = 5;
+// Converting is the expensive half (it re-reads whole transcripts), so by
+// default only the first few shared sessions are compared. SAMPLE=50 widens it
+// when a claim needs more evidence than a handful of files.
+const SAMPLE = Number(process.env.SAMPLE) > 0 ? Number(process.env.SAMPLE) : 5;
+
+/** role order only — robust against formatting differences inside a message */
+const sigRoles = (msgs) => (msgs ?? []).map((m) => m.role).join(",");
+
+/** role + normalised text: whitespace-trimmed, capped so output stays readable */
+const sigFull = (msgs) =>
+  (msgs ?? [])
+    .map((m) => `${m.role}:${String(m.content ?? "").replace(/\s+/g, " ").trim().slice(0, 160)}`)
+    .join("\n");
+
+/** First index where two message lists diverge, for eyeballing a failure. */
+function describeDiff(id, a, b) {
+  const n = Math.max(a.length, b.length);
+  for (let i = 0; i < n; i++) {
+    const x = a[i];
+    const y = b[i];
+    if (!x || !y) return `${id} @${i}: one side ended (ref=${a.length} spec=${b.length})`;
+    if (x.role !== y.role || String(x.content ?? "") !== String(y.content ?? "")) {
+      return (
+        `${id} @${i}\n` +
+        `    ref  ${x.role}: ${String(x.content ?? "").replace(/\s+/g, " ").slice(0, 120)}\n` +
+        `    spec ${y.role}: ${String(y.content ?? "").replace(/\s+/g, " ").slice(0, 120)}`
+      );
+    }
+  }
+  return null;
+}
 
 async function main() {
   console.log("Real-data validation: declarative specs vs built-in adapters\n");
@@ -159,6 +301,10 @@ async function main() {
 
     const refMap = byId(refRows);
     const specMap = byId(specRows);
+    // Duplicate externalIds collapse in byId(); they mean two files claim the
+    // same session, which is worth seeing rather than hiding.
+    const refDup = refRows.length - refMap.size;
+    const specDup = specRows.length - specMap.size;
     const shared = [...specMap.keys()].filter((k) => refMap.has(k));
     let countMatch = 0;
     for (const k of shared) {
@@ -167,34 +313,62 @@ async function main() {
     const coverage = refMap.size ? shared.length / refMap.size : 0;
     const parity = shared.length ? countMatch / shared.length : 0;
 
-    // Scan-time `messageCount` is not comparable everywhere: codex.js counts
-    // every response_item event and is explicitly a head-limited
-    // approximation. The real semantic check is the converted conversation.
+    // Scan-time `messageCount` is not comparable everywhere: codex.js never
+    // increments it (always 0) and claude.js counts raw transcript lines
+    // rather than imported messages. The real semantic check is the converted
+    // conversation: same length, same role order, same text.
     let convChecked = 0;
     let convMatch = 0;
-    for (const k of shared.slice(0, 5)) {
+    let roleMatch = 0;
+    let fullMatch = 0;
+    let firstDiff = null;
+    for (const k of shared.slice(0, SAMPLE)) {
       try {
         const a = await reference.convert(refMap.get(k));
         const b = await declarative.convert(specMap.get(k));
+        const am = a?.messages ?? [];
+        const bm = b?.messages ?? [];
         convChecked++;
-        if ((a?.messages?.length ?? -1) === (b?.messages?.length ?? -1)) convMatch++;
+        if (am.length === bm.length) convMatch++;
+        if (sigRoles(am) === sigRoles(bm)) roleMatch++;
+        if (sigFull(am) === sigFull(bm)) fullMatch++;
+        else if (!firstDiff) firstDiff = describeDiff(k, am, bm);
       } catch {
         /* a session either side cannot convert is not counted */
       }
     }
     const convParity = convChecked ? convMatch / convChecked : 0;
 
+    // Session-set differences: a session only one side sees is a session the
+    // user cannot import, so it is worth more than a column of percentages.
+    let onlyRef = [];
+    let onlySpec = [];
+    if (SHOW_DIFF) {
+      onlyRef = [...refMap.keys()].filter((k) => !specMap.has(k)).slice(0, DIFF_SAMPLE);
+      onlySpec = [...specMap.keys()].filter((k) => !refMap.has(k)).slice(0, DIFF_SAMPLE);
+      for (const k of onlyRef) {
+        console.log(`  [only built-in] ${label} ${k} :: ${refMap.get(k).title}`);
+      }
+      for (const k of onlySpec) {
+        console.log(`  [only spec]     ${label} ${k} :: ${specMap.get(k).title}`);
+      }
+    }
+
     results.push({
       label,
       status: refRows.length === 0 ? "NO DATA" : parity >= 0.95 && coverage >= 0.95 ? "PASS" : "DIFF",
       builtin: refRows.length,
       spec: specRows.length,
+      dup: `${refDup}/${specDup}`,
       matched: shared.length,
       countMatch,
       coverage: `${(coverage * 100).toFixed(1)}%`,
       parity: `${(parity * 100).toFixed(1)}%`,
       conv: `${convMatch}/${convChecked}`,
       convParity,
+      roles: `${roleMatch}/${convChecked}`,
+      full: `${fullMatch}/${convChecked}`,
+      firstDiff,
       ms,
     });
   }
@@ -205,13 +379,16 @@ async function main() {
       pad("status", 9) +
       pad("built-in", 10) +
       pad("spec", 8) +
+      pad("dup r/s", 9) +
       pad("matched", 9) +
       pad("msgCount=", 11) +
       pad("parity", 9) +
-      pad("convert", 9) +
+      pad("conv", 8) +
+      pad("roles", 8) +
+      pad("exact", 8) +
       "ms",
   );
-  console.log("-".repeat(88));
+  console.log("-".repeat(92));
   for (const r of results) {
     if (r.status === "SKIP" || r.status === "ERROR") {
       console.log(`${pad(r.label, 14)}${pad(r.status, 9)}${r.detail ?? ""}`);
@@ -222,11 +399,17 @@ async function main() {
       continue;
     }
     console.log(
-      `${pad(r.label, 14)}${pad(r.status, 9)}${pad(r.builtin, 10)}${pad(r.spec, 8)}${pad(r.matched, 9)}${pad(r.countMatch, 11)}${pad(r.parity, 9)}${pad(r.conv, 9)}${r.ms}`,
+      `${pad(r.label, 14)}${pad(r.status, 9)}${pad(r.builtin, 10)}${pad(r.spec, 8)}${pad(r.dup, 9)}${pad(r.matched, 9)}${pad(r.countMatch, 11)}${pad(r.parity, 9)}${pad(r.conv, 8)}${pad(r.roles, 8)}${pad(r.full, 8)}${r.ms}`,
     );
   }
   console.log("\ncoverage = spec sessions that also exist in the built-in scan");
-  console.log("parity   = share of matched sessions whose messageCount is identical");
+  console.log("parity   = share of matched sessions whose scan messageCount is identical (0% is expected for Codex: the built-in never fills it)");
+  console.log(`conv     = ${SAMPLE} matched sessions: same message count / same role order / byte-identical text`);
+  for (const r of results) {
+    if (r.full && r.full !== "0/0" && !r.full.startsWith(`${r.full.split("/")[1]}/`)) {
+      console.log(`\nfirst divergence — ${r.label}:\n  ${r.firstDiff}`);
+    }
+  }
 }
 
 main().catch((e) => {

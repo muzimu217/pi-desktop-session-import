@@ -286,3 +286,58 @@ describe("end-to-end: config -> registry -> pipeline", () => {
     assert.notEqual(registry.getAdapter("opencode").label, "Fake");
   });
 });
+
+describe("custom sources: real-world spec shapes stay valid data", () => {
+  test("toolCall / textOps / follow / unwrapPath specs are accepted", () => {
+    // These are the shapes the built-in Claude/WorkBuddy/Codex adapters need.
+    // None of them may be rejected by the declarative-only denylist.
+    const spec = {
+      id: "claude-like",
+      label: "Claude-like",
+      driver: "jsonl-transcript",
+      root: "~/.claude/projects",
+      maxDepth: 2,
+      session: {
+        idFrom: { first: [{ path: "payload.id" }, { path: "id" }] },
+        idFromEntry: { path: "type", in: ["session_meta"] },
+        titleFrom: "firstUser",
+      },
+      entry: {
+        unwrapPath: "payload",
+        match: { path: "type", in: ["user", "assistant"] },
+        rolePath: "message.role",
+        content: { blocks: { path: "message.content", typeField: "type", types: ["text"], textField: "text" } },
+        tsPath: "timestamp",
+        drop: { startsWith: ["<"], roles: ["user"] },
+        textOps: [
+          { op: "stripXmlBlocks", tags: ["system-reminder"], roles: ["user"] },
+          { op: "extractXmlTag", tag: "user_query", roles: ["user"] },
+        ],
+        toolCall: {
+          callBlocks: { path: "message.content", typeField: "type", type: "tool_use", idPath: "id", namePath: "name", argsPath: "input", roles: ["assistant"] },
+          resultBlocks: { path: "message.content", typeField: "type", type: "tool_result", idPath: "tool_use_id", resultPath: "content", statusPath: "is_error", roles: ["user"] },
+          emitUnpaired: true,
+        },
+      },
+    };
+    const { ok, errors } = cs.validateSpec(spec, 0);
+    assert.deepEqual(errors, []);
+    assert.equal(ok, true);
+  });
+
+  test("a follow rule cannot widen the read scope beyond the data root", () => {
+    // follow is data, so it passes validation; the containment check lives in
+    // the mapper (see entry-map tests) and must stay there.
+    const { ok } = cs.validateSpec(
+      {
+        id: "with-follow",
+        label: "Follow",
+        driver: "jsonl-transcript",
+        root: "~/.mytool/sessions",
+        entry: { toolCall: { result: { follow: { marker: "Full output saved to:", maxBytes: 1024 } } } },
+      },
+      0,
+    );
+    assert.equal(ok, true);
+  });
+});
