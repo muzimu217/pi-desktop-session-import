@@ -170,7 +170,6 @@
   "permissions": [
     "ui.panel",
     "ui.view",
-    "notify",
     "session.read",
     "session.read.own",
     "session.import",
