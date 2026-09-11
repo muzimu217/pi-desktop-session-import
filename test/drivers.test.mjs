@@ -363,3 +363,50 @@ describe("extensibility: registry + declarative source", () => {
     assert.equal(out.session, null);
   });
 });
+
+describe("extract: content rules against real-world shapes", () => {
+  const { extractText } = require(`${PLUGIN_DIR}/lib/drivers/extract.js`);
+  const rule = {
+    blocks: { path: "message.content", typeField: "type", types: ["text"], textField: "text" },
+  };
+
+  test("blocks rule returns a plain string when content is not an array", () => {
+    assert.equal(extractText(rule, { message: { content: "plain text" } }), "plain text");
+  });
+
+  test("blocks rule never dumps raw JSON when no text block matches", () => {
+    // Real Claude entries carry thinking/tool_use-only content arrays.
+    assert.equal(extractText(rule, { message: { content: [{ type: "thinking", thinking: "x" }] } }), "");
+    assert.equal(extractText(rule, { message: { content: [{ type: "tool_use", name: "Read" }] } }), "");
+  });
+
+  test("blocks rule joins only the matching text blocks", () => {
+    const entry = {
+      message: {
+        content: [
+          { type: "thinking", thinking: "ignored" },
+          { type: "text", text: "hello" },
+          { type: "text", text: "world" },
+        ],
+      },
+    };
+    assert.equal(extractText(rule, entry), "hello\nworld");
+  });
+});
+
+describe("fsutil: maxDepth keeps scans out of nested non-session dirs", () => {
+  const { listFiles } = require(`${PLUGIN_DIR}/lib/drivers/fsutil.js`);
+
+  test("maxDepth 2 collects <root>/<dir>/<file> and nothing deeper", async () => {
+    const root = makeDir("depth");
+    fs.mkdirSync(path.join(root, "proj", ".timelines", "deep"), { recursive: true });
+    fs.writeFileSync(path.join(root, "proj", "session.jsonl"), "x");
+    fs.writeFileSync(path.join(root, "proj", ".timelines", "deep", "messages.jsonl"), "y");
+
+    const shallow = await listFiles(root, { extension: ".jsonl", maxDepth: 2 });
+    assert.deepEqual(shallow.map((f) => path.relative(root, f)), [path.join("proj", "session.jsonl")]);
+
+    const deep = await listFiles(root, { extension: ".jsonl" });
+    assert.equal(deep.length, 2, "unbounded recursion does reach the nested file");
+  });
+});
