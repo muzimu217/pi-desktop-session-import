@@ -16,12 +16,13 @@
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import path, { dirname, join } from "node:path";
 
 const require = createRequire(import.meta.url);
-const PLUGIN_DIR = "/Users/blackevil/dev/pi-desktop-session-import";
+const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 const cs = require(`${PLUGIN_DIR}/lib/custom-sources.js`);
 const { makeDeclarativeSource } = require(`${PLUGIN_DIR}/lib/sources/declarative.js`);
 
