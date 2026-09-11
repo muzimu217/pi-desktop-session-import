@@ -14,9 +14,11 @@
 import { test, describe, before, beforeEach, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const PLUGIN_DIR = "/Users/blackevil/dev/pi-desktop-session-import";
+const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ---------- helpers ----------
 
@@ -29,7 +31,13 @@ function installRegistry(adapters) {
     loaded: true,
     exports: {
       ADAPTERS: adapters,
+      allAdapters: () => adapters,
       getAdapter: (s) => adapters.find((a) => a.source === s) ?? null,
+      // Extensibility exports (no custom sources in these unit tests).
+      getDynamicAdapters: () => [],
+      refreshDynamicSources: async () => [],
+      getDynamicLoadReport: () => ({ count: 0, errors: [], configPath: null }),
+      CONFIG_PATH: "docs/session-import-sources.json",
     },
   };
 }
@@ -66,8 +74,8 @@ describe("main.onPanelInvoke / import.* dispatch", () => {
     const main = freshMain();
     const out = await main.onPanelInvoke("import.adapters");
     assert.deepStrictEqual(out, [
-      { source: "a", label: "a" },
-      { source: "b", label: "b" },
+      { source: "a", label: "a", custom: false, dataPath: null },
+      { source: "b", label: "b", custom: false, dataPath: null },
     ]);
   });
 
@@ -98,6 +106,8 @@ describe("F-10 import.scanSource — error observability (P0 of v0.5.0)", () => 
       error: null,
       // Adapters without scanFast() complete in one pass.
       partial: false,
+      // Sessions too large for the host contract (surfaced in the UI).
+      oversized: 0,
     });
   });
 

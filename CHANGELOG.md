@@ -3,6 +3,43 @@
 All notable changes to this plugin are documented here. Versions follow
 semver; the plugin id is `io.github.muzimu217.session-import`.
 
+## Unreleased — 本地补丁（尚未发版）
+
+- **移除「归组到项目」勾选项**。该开关是空操作：宿主侧 `import_session` 只要
+  `project_path` 非空就执行 `ensure_project(path)` 绑定项目，**完全不看
+  `projectId`**；因此即便取消勾选、插件不传 projectPath，会话也照常被归到源项目，
+  勾选毫无意义。现在改为**默认按项目归组**——有 `projectPath` 一律绑项目，无
+  `projectPath` 的会话回落到独立的「会话」列表（经 `project_id IS NULL` 索引），
+  **永不丢数据**。
+- **删除导入完成后的「会话熔炉」原生通知**。该提示用户看不懂（"点击右侧会话熔炉
+  开始蒸馏"），已移除；**会话熔炉功能本身保留**，仅去掉这条通知。`manifest`
+  不再需要 `notify` 权限。
+- 导入完成提示简化为统一文案：已按项目归组，打开对应项目或在「项目」页查看。
+
+## 0.4.7 — 2026-09-11（可扩展来源）
+
+- **新增声明式格式驱动层**：`jsonl-transcript` / `sqlite-session` / `json-tree`
+  三个 driver 覆盖三类磁盘格式（一行一条 JSON 的 transcript、`session → message → part`
+  的 SQLite、单文件即一会话的 JSON 树）。新增一个来源从"写一个 .js 适配器"变成"写一份配置"。
+- **用户可自定义来源**：工作区 `docs/session-import-sources.json`（`docs/**` 已在插件
+  `fs.read` 范围内，无需新增权限），面板「自定义来源 → 重新加载」热加载，带 `自定义` 标签。
+  - **安全边界**：配置只接受**纯数据**。任意层级出现 `eval` / `code` / `require` /
+    `transform` / `script` 等键即拒绝；数据根目录拒绝 `/` 与整个 home。插件对用户主目录有
+    读权限，允许配置携带代码等同于任意代码执行，因此这里**永不执行**配置里的任何代码。
+  - 字段说明与三个可直接复制的示例见 `docs/CUSTOM-SOURCES.md`。
+- **驱动层已用真实数据逐条比对校验**（`tools/validate-drivers-real.cjs`）：
+  同一份本机数据上，声明式 spec 与手写适配器并行跑，比对完整消息序列。
+  **1693 个会话逐字节一致** —— Claude 61/61、Codex 774/774、WorkBuddy 159/159、
+  ZCode 70/70、OpenCode 629/629。
+  - 校验中修掉 7 个合成 fixture 测不出的缺陷：两阶段工具调用的三种形状（条目级
+    `function_call`→`function_call_result`、块级 `tool_use`→`tool_result` 按 id 配对）、
+    ZCode 的 `sequence` 排序列、Codex 条目 id 顶替会话 id、事件信封解包、注入文本剥离、
+    外部化输出回读、结果字段的 trim / 序列化口径。
+  - 有意保留的差异：超出读取预算（默认单文件 32 MB / 20000 行）的文件，以及一条可导入
+    消息都没有的 transcript。
+- 包含 **0.4.6 健壮性加固**（看门狗超时、按 `externalId` 去重并标记 `oversized`、契约截断
+  显式回传 `truncated`）与 **0.4.5**（OpenCode v1.x SQLite 存储修复）。
+
 ## 0.4.4 — 2026-09-10
 
 - **修复：`导入失败：toolResult exceeds 256 KiB`（整批被拒）**。
