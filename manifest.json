@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.muzimu217.session-import",
   "name": "Universal Session Import",
-  "version": "0.4.5",
+  "version": "0.4.6",
   "description": "一体化会话导入与熔炉：扫描本机的 ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi 并导入会话；再读回这些会话，用宿主额度蒸馏成项目约定与可复用做法。",
   "i18n": {
     "en": {
@@ -21,7 +21,7 @@
     "productivity",
     "import"
   ],
-  "changelog": "Release 0.4.2：适配已合入官方 main 的 pi.session.importBatch 正式契约（#169）——工具载荷按整批输入深度≤8 收紧护栏（toolArgs/toolResult 自身深度>3 降级为字符串）；逐条预检 title/externalId 非空，坏条目跳过不再污染整批；消息数按官方 2000 上限截断；导入统一走 import.commit 单一入口（官方优先，运行时探测宿主未接线自动回退旧 session.import 桥接）；forge 适配官方 session.list 的 {items} 返回形状。真实 UI 端到端验证通过（扫描→导入→幂等→侧栏刷新→点开渲染）。",
+  "changelog": "Release 0.4.6（健壮性 / 安全加固）：为全部来源的扫描与转换调用加看门狗超时（单源扫描 90s、后台全量预热 5min、单条转换 30s），损坏或挂载式数据库、异常适配器不再卡死导入面板；扫描阶段按 externalId 去重并标记超大会话（oversized）；导入阶段契约截断（单条消息 512KiB、工具载荷 256KiB、单会话 2000 消息）现在显式回传 truncated 标记，UI 以「警告」呈现被截断导入，扫描计数徽标展示 oversized 数量；扫描失败按超时 / 失败分别提示。基于 0.4.5（OpenCode v1.x SQLite 存储修复）之上发布。",
   "safetyNotes": "以只读方式打开各工具的本地会话数据库；会话写入走宿主 session 导入接口。熔炉使用宿主自身额度调用模型，插件不接触 API Key。fs.write 仅用于保存蒸馏结果，范围限定在工作区内的 AGENTS.md、*.md、docs/**、.agents/skills/**。不发起网络请求，无遥测。",
   "author": "muzimu217",
   "main": "main.js",
