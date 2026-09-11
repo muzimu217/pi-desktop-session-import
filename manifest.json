@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.muzimu217.session-import",
   "name": "Universal Session Import",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "一体化会话导入与熔炉：扫描本机的 ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi 并导入会话；再读回这些会话，用宿主额度蒸馏成项目约定与可复用做法。",
   "i18n": {
     "en": {
