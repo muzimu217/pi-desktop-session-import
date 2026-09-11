@@ -14,7 +14,15 @@
  */
 "use strict";
 
-const { ADAPTERS, getAdapter } = require("./lib/registry");
+const {
+  ADAPTERS,
+  getAdapter,
+  allAdapters,
+  refreshDynamicSources,
+  getDynamicLoadReport,
+  CONFIG_PATH,
+} = require("./lib/registry");
+const { driverNames } = require("./lib/drivers");
 const forge = require("./lib/forge");
 const bus = require("./lib/bus");
 const history = require("./lib/history");
@@ -74,6 +82,15 @@ async function onLoad() {
       );
     },
   });
+
+  // User-defined sources live in docs/session-import-sources.json and are read
+  // through the host fs bridge, so they stay inside the declared fs.read scope.
+  // A missing or invalid config simply means "built-in sources only".
+  try {
+    await refreshDynamicSources({ readText: async (rel) => pi.fs.readText(rel) });
+  } catch {
+    /* no workspace / no config -> built-in sources only */
+  }
 }
 
 async function onUnload() {
@@ -85,7 +102,40 @@ async function onUnload() {
 async function onPanelInvoke(channel, payload) {
   switch (channel) {
     case "import.adapters":
-      return ADAPTERS.map((a) => ({ source: a.source, label: a.label }));
+      return allAdapters().map((a) => ({
+        source: a.source,
+        label: a.label,
+        custom: a.custom === true,
+        dataPath: a.dataPath || null,
+      }));
+    case "import.customSources": {
+      const report = getDynamicLoadReport();
+      return {
+        configPath: report.configPath || CONFIG_PATH,
+        drivers: driverNames(),
+        count: report.count ?? 0,
+        errors: report.errors ?? [],
+      };
+    }
+    case "import.reloadCustomSources": {
+      try {
+        await refreshDynamicSources({ readText: async (rel) => pi.fs.readText(rel) });
+      } catch (err) {
+        return {
+          configPath: CONFIG_PATH,
+          drivers: driverNames(),
+          count: 0,
+          errors: [String((err && err.message) || err)],
+        };
+      }
+      const report = getDynamicLoadReport();
+      return {
+        configPath: report.configPath || CONFIG_PATH,
+        drivers: driverNames(),
+        count: report.count ?? 0,
+        errors: report.errors ?? [],
+      };
+    }
     case "import.scanSource":
       return scanSource(payload);
     case "import.sessions":
