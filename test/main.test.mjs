@@ -98,6 +98,8 @@ describe("F-10 import.scanSource — error observability (P0 of v0.5.0)", () => 
       error: null,
       // Adapters without scanFast() complete in one pass.
       partial: false,
+      // 0.4.6 flags sessions whose content exceeds the contract limits.
+      oversized: 0,
     });
   });
 
