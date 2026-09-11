@@ -686,14 +686,11 @@ function toContractSession(item, conv, projectId) {
     messages,
   };
   // Host contract: only an explicit host-created projectId binds the session
-  // to a project. IMPORTANT sidebar semantics (verified on host source, both
-  // v0.14.1 and current main): the left sidebar only renders project groups
-  // for project tabs the user has actually opened (openProjectPaths) plus the
-  // active workspace; a bound session whose project has no open tab is
-  // visible nowhere in the sidebar (only on the Projects index page). An
-  // unbound session (projectId omitted) lands in the standalone SESSIONS
-  // list, which IS the left list users see immediately. So binding is opt-in
-  // ("placement: project"); the default keeps imports visible on arrival.
+  // to a project. The official host opens plugin-created projects in the
+  // renderer when project.create succeeds, so project-bound imports appear in
+  // the sidebar as well as the Projects index. An unbound session
+  // (projectId omitted) lands in the standalone SESSIONS list. Binding remains
+  // opt-in ("placement: project").
   if (projectId !== undefined && projectId !== null) session.projectId = projectId;
   return enforceContractLimits(session);
 }
