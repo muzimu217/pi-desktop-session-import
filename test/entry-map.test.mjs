@@ -17,13 +17,13 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
-import path, { dirname, join } from "node:path";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PLUGIN_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const { mapEntries } = require(`${PLUGIN_DIR}/lib/drivers/entry-map.js`);
 const { applyTextOps } = require(`${PLUGIN_DIR}/lib/drivers/extract.js`);

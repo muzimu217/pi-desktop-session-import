@@ -14,13 +14,13 @@
 import { test, describe, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
 import fs from "node:fs";
 import os from "node:os";
-import path, { dirname, join } from "node:path";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const PLUGIN_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
+const PLUGIN_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const jsonl = require(`${PLUGIN_DIR}/lib/drivers/jsonl-transcript.js`);
 const jsonTree = require(`${PLUGIN_DIR}/lib/drivers/json-tree.js`);
@@ -470,5 +470,12 @@ describe("fsutil: maxDepth keeps scans out of nested non-session dirs", () => {
 
     const deep = await listFiles(root, { extension: ".jsonl" });
     assert.equal(deep.length, 2, "unbounded recursion does reach the nested file");
+  });
+
+  test("empty extension matches no files", async () => {
+    const root = makeDir("empty-ext");
+    fs.writeFileSync(path.join(root, "session.jsonl"), "x");
+    const none = await listFiles(root, { extension: "" });
+    assert.deepEqual(none, []);
   });
 });

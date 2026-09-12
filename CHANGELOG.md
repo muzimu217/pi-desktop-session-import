@@ -3,7 +3,7 @@
 All notable changes to this plugin are documented here. Versions follow
 semver; the plugin id is `io.github.muzimu217.session-import`.
 
-## Unreleased — 本地补丁（尚未发版）
+## 0.4.8 — 2026-09-11（导入行为修正）
 
 - **移除「归组到项目」勾选项**。该开关是空操作：宿主侧 `import_session` 只要
   `project_path` 非空就执行 `ensure_project(path)` 绑定项目，**完全不看
@@ -15,6 +15,7 @@ semver; the plugin id is `io.github.muzimu217.session-import`.
   开始蒸馏"），已移除；**会话熔炉功能本身保留**，仅去掉这条通知。`manifest`
   不再需要 `notify` 权限。
 - 导入完成提示简化为统一文案：已按项目归组，打开对应项目或在「项目」页查看。
+- 基于 0.4.7 之上发布；0.4.7 的声明式驱动层、自定义来源与安全加固全部保留不变。
 
 ## 0.4.7 — 2026-09-11（可扩展来源）
 
@@ -24,8 +25,8 @@ semver; the plugin id is `io.github.muzimu217.session-import`.
 - **用户可自定义来源**：工作区 `docs/session-import-sources.json`（`docs/**` 已在插件
   `fs.read` 范围内，无需新增权限），面板「自定义来源 → 重新加载」热加载，带 `自定义` 标签。
   - **安全边界**：配置只接受**纯数据**。任意层级出现 `eval` / `code` / `require` /
-    `transform` / `script` 等键即拒绝；数据根目录拒绝 `/` 与整个 home。插件对用户主目录有
-    读权限，允许配置携带代码等同于任意代码执行，因此这里**永不执行**配置里的任何代码。
+    `transform` / `script` 等键即拒绝；数据根目录拒绝 `/`、Windows 盘符根与整个 home。
+    `extension` 必须是真正的后缀（拒绝空字符串/`*`）。插件对用户主目录有
   - 字段说明与三个可直接复制的示例见 `docs/CUSTOM-SOURCES.md`。
 - **驱动层已用真实数据逐条比对校验**（`tools/validate-drivers-real.cjs`）：
   同一份本机数据上，声明式 spec 与手写适配器并行跑，比对完整消息序列。
