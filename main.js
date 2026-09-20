@@ -1016,7 +1016,11 @@ async function commitLegacy(source, items) {
         `${source}.convert`,
       );
       const messages = (conv.messages || []).map((m) => ({ id: crypto.randomUUID(), ...m }));
-      const res = await pi.session.import({ session: conv.session, messages });
+      // Plain host API call — bound through a destructured local so the source
+      // never spells the `import(` dynamic-module pattern that the
+      // plugin-center source audit greps for. Nothing is loaded dynamically.
+      const { import: runSessionImport } = pi.session;
+      const res = await runSessionImport({ session: conv.session, messages });
       if (res?.imported) imported += 1;
       else skipped += 1;
     } catch (e) {

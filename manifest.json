@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.muzimu217.session-import",
   "name": "Universal Session Import",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "一体化会话导入与熔炉：扫描本机的 ZCode、WorkBuddy、Claude Code、Codex、OpenCode、Pi 并导入会话；可用声明式 JSON 自定义来源扩展；再读回这些会话，用宿主额度蒸馏成项目约定与可复用做法。",
   "i18n": {
     "en": {
@@ -21,7 +21,7 @@
     "productivity",
     "import"
   ],
-  "changelog": "Release 0.4.8（导入行为修正）：默认按项目归组导入——移除无意义的「归组到项目」勾选项（宿主 import_session 只要 project_path 非空即自动绑定项目，忽略 projectId，故该开关是空操作）；无 projectPath 的会话回落独立「会话」列表，永不丢数据。移除导入完成后的「会话熔炉」原生通知（文案不清晰；会话熔炉功能保留），manifest 不再需要 notify 权限。保留 0.4.7 的声明式格式驱动层、自定义来源与其安全加固（拒绝文件系统根/Windows 盘符根、extension 必须为真后缀、SQLite 标识符字符集限制、convert 限制在 spec 根内），以及 0.4.6 健壮性加固。基于 0.4.7 之上发布。",
+  "changelog": "Release 0.4.9（OpenCode v1.x Windows 路径修复，#682）：OpenCode 适配器改为多候选路径探测——Windows 应用数据目录 %LOCALAPPDATA%\\opencode\\data\\（OpenCode 官方确认的位置）、XDG_DATA_HOME（若设置）、以及 ~/.local/share/opencode 默认位置，按序探测第一个存在的库。此前只探测 ~/.local/share/opencode/opencode.db，Windows 用户的 OpenCode v1.x 数据永远找不到，导入面板显示「未检测到」。macOS/Linux 行为不变。新增适配器专属测试（真实临时 SQLite 库覆盖三平台路径与三层还原）。",
   "safetyNotes": "以只读方式打开各工具的本地会话数据库；会话写入走宿主 session 导入接口。熔炉使用宿主自身额度调用模型，插件不接触 API Key。fs.write 仅用于保存蒸馏结果，范围限定在工作区内的 AGENTS.md、*.md、docs/**、.agents/skills/**。不发起网络请求，无遥测。 自定义来源配置（工作区 docs/session-import-sources.json）只接受纯数据，插件永不执行其中的代码。",
   "author": "muzimu217",
   "main": "main.js",
