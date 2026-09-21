@@ -32,6 +32,18 @@ E2E 场景若干）。
 
 结论：**会话线本插件已是严格超集**，迁移主要是入口切换与行为对齐核对，不是补功能。
 
+## M0 行为对齐核对结果（2026-09-20，完成）
+
+| 宿主导入器 | 对象 | 结论 |
+|---|---|---|
+| claude.ts（199 行） | `lib/sources/claude.js` | **parity ✓**：sidechain 过滤、`<` 合成行、tool_use↔tool_result 配对（含孤儿 result 容忍）逐条一致 |
+| codex.ts（518 行） | `lib/sources/codex.js` | **修复一处真实缺口**：宿主的合成行前缀表已扩到 10 条（#265 证据驱动的 IDE-context 家族），本插件原为 3 条 → 已对齐（逐字节 diff 校验）+ 专项测试 |
+| opencode.ts（183 行） | `lib/sources/opencode.js` | **本插件领先**：宿主仍读旧版 `storage/session|message` JSON 树（pre-v1.x），插件读 v1.x SQLite + 三平台路径 |
+| pi.ts（198 行） | `lib/sources/pi.js` | **parity ✓**：session_info 名称优先、toolCall/toolResult 按 id 配对一致 |
+
+性能注记（非正确性）：宿主 codex 扫描上限 250 文件 / 5MB 全解析 / 大文件头切片；本插件
+fast 扫描 120 文件——迁移到 M3 时可对齐上限。M0 修复已随 `1072c7e` 进独立仓库 main。
+
 ## 二、缺口分析（迁移真正要解决的事）
 
 插件 SDK 现有面：`contributes.providers / skills / mcpServers` 是**静态声明**（清单里写死、
