@@ -3,6 +3,14 @@
 All notable changes to this plugin are documented here. Versions follow
 semver; the plugin id is `io.github.muzimu217.session-import`.
 
+## Unreleased
+
+- **fix(codex): 支持新版 Codex .jsonl.zst 压缩与分页多段会话合并**：
+  - 流式解压 `.jsonl.zst` 归档并支持 `sessions/` 与 `archived_sessions/` 目录；
+  - 自动识别多段分页会话（`rollout-<ts>-<threadId>[_<pageId>]`）并按时间顺序完整合并；
+  - 优先读取 `state_5.sqlite` 与 `session_index.jsonl` 中的真实标题与项目映射，解决未选目录时的临时目录伪工作区问题；
+  - 过滤 `subagent` 子智能体派生会话，支持 `custom_tool_call` 工具记录并保留交互问答回复。
+
 ## 0.4.8 — 2026-09-11（导入行为修正）
 
 - **移除「归组到项目」勾选项**。该开关是空操作：宿主侧 `import_session` 只要
